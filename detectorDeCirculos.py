@@ -5,142 +5,293 @@ import torchvision
 import torch
 import math
 
-model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+# MODELO
+model = torchvision.models.detection.fasterrcnn_resnet50_fpn(weights="DEFAULT")
 model.eval()
 
-device = "cpu"
-
+# DEVICE
 if torch.cuda.is_available():
-    model.cuda()
     device = torch.device("cuda")
+    model.to(device)
+else:
+    device = torch.device("cpu")
 
-def preprocess(img):
-    imagem = img.copy()
+# PREPROCESSAMENTO CNN
+def preprocessamentoCNN(img):
+    imagem = img.copy().astype(np.float32)
     imagem = imagem.transpose(2, 0, 1)
-    imagem /= 255.
+    imagem /= 255.0
+
     return imagem
 
-def detect_clock(img):
-    inp = [torch.from_numpy(preprocess(img)).float().to(device)]
-    predict = model(inp)[0]
+# PREPROCESSAMENTO OPENCV
+def preprocessamentoCV(img):
+    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    gray = cv.equalizeHist(gray)
+    gray = cv.GaussianBlur(gray, (5, 5), 0)
 
-    boxes = predict['boxes'].detach()
-    labels = predict['labels']
-    scores = predict['scores']
+    return gray
+
+# RESIZE
+def resizeImagem(img, largura=500):
+    h, w = img.shape[:2]
+    escala = largura / w
+    nova_altura = int(h * escala)
+    img = cv.resize(img, (largura, nova_altura))
+
+    return img
+
+# DETECTAR RELÓGIO
+def detectarRelogio(img, threshold=0.7):
+    inp = [torch.from_numpy(preprocessamentoCNN(img)).float().to(device)]
+
+    with torch.no_grad():
+        predict = model(inp)[0]
+
+    boxes = predict['boxes'].detach().cpu().numpy()
+    labels = predict['labels'].detach().cpu().numpy()
+    scores = predict['scores'].detach().cpu().numpy()
+
+    melhor_box = None
+    melhor_score = 0
 
     for i in range(len(labels)):
-        label = labels[i].item()
-        if label == 85:
-            return boxes[i].cpu().numpy().round().astype(np.uint16)
-    
-    return None
+        # classe 85 = clock no COCO
+        if labels[i] == 85 and scores[i] > threshold:
+            if scores[i] > melhor_score:
+                melhor_score = scores[i]
+                melhor_box = boxes[i]
 
-def findLines(img):
-    threshold = 50
-    deg = np.pi / 180
-    rad = 1
-    min = 50
-    max = 10
+    if melhor_box is None:
+        return None
 
-    return cv.HoughLinesP(img, rad, deg, threshold, minLineLength=min, maxLineGap=max)
+    return melhor_box.round().astype(np.int32)
 
-def dist(a, b, c, d):
-    return math.sqrt(math.pow(a - c, 2) + math.pow(b - d, 2))
+# DETECTAR CÍRCULO
+def detectarCirculo(gray):
+    circles = cv.HoughCircles(
+        gray,
+        cv.HOUGH_GRADIENT,
+        dp=1.2,
+        minDist=100,
+        param1=100,
+        param2=30,
+        minRadius=int(gray.shape[0] * 0.25),
+        maxRadius=int(gray.shape[0] * 0.48)
+    )
 
-def proximaCentro(a, b, c, d, x, y, raio):
-    return dist(a, b, x, y) <= raio or dist(c, d, x, y) <= raio
+    if circles is None:
+        return None
 
-def encontraPonteiros(linhas, x, y, raio):
+    circles = np.round(circles[0]).astype(int)
+
+    # pega maior círculo
+    x, y, r = max(circles, key=lambda c: c[2])
+
+    return x, y, r
+
+# DISTÂNCIA
+def distancia(x1, y1, x2, y2):
+    return math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+
+# DETECTAR LINHAS
+def detectarLinhas(edges):
+    linhas = cv.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=50,
+        minLineLength=50,
+        maxLineGap=10
+    )
+
+    return linhas
+
+# FILTRAR LINHAS
+def filtrarLinhas(linhas, cx, cy, raio):
+    if linhas is None:
+        return []
+
     ponteiros = []
 
     for linha in linhas:
-        for x1, y1, x2, y2 in linha:
-            if proximaCentro(x1, y1, x2, y2, x, y, raio):
-                if dist(x1, y1, x, y) > dist(x2, y2, x, y):
-                    x1, y1, x2, y2 = x2, y2, x1, y1
+        x1, y1, x2, y2 = linha[0]
 
-                angulo = math.degrees(math.atan2(x2 - x1, y1 - y2))
-                if angulo < 0: angulo += 360
-                tamanho =  dist(x1, y1, x2, y2)
+        d1 = distancia(x1, y1, cx, cy)
+        d2 = distancia(x2, y2, cx, cy)
 
-                ponteiros.append((angulo, tamanho))
-    
+        # uma ponta deve estar próxima do centro
+        if d1 > raio * 0.25 and d2 > raio * 0.25:
+            continue
+
+        # organiza ponto mais próximo do centro
+        if d1 > d2:
+            x1, y1, x2, y2 = x2, y2, x1, y1
+
+        tamanho = distancia(x1, y1, x2, y2)
+
+        # ignora linhas pequenas
+        if tamanho < raio * 0.3:
+            continue
+
+        dx = x2 - x1
+        dy = y1 - y2
+
+        angulo = math.degrees(math.atan2(dx, dy))
+
+        if angulo < 0:
+            angulo += 360
+
+        ponteiros.append({
+            'angulo': angulo,
+            'tamanho': tamanho,
+            'coords': (x1, y1, x2, y2)
+        })
+
     return ponteiros
 
-def clusterLinhas(linhas):
-    linhas.sort()
-    max = 5
-    clusters = [[linhas[0]]]
+# CLUSTERIZAÇÃO ANGULAR
+def clusterizarPonteiros(ponteiros, tolerancia=8):
+    if len(ponteiros) == 0:
+        return []
 
-    for i in range(1, len(linhas)):
-        if abs(linhas[i][0] - linhas[i-1][0]) <= max:
-            clusters[len(clusters) - 1].append(linhas[i])
+    ponteiros = sorted(ponteiros, key=lambda p: p['angulo'])
+    clusters = [[ponteiros[0]]]
+
+    for i in range(1, len(ponteiros)):
+        atual = ponteiros[i]
+        anterior = ponteiros[i - 1]
+
+        if abs(atual['angulo'] - anterior['angulo']) <= tolerancia:
+            clusters[-1].append(atual)
         else:
-            clusters.append([linhas[i]])
-    
-    return clusters
+            clusters.append([atual])
 
-def sumarizarClusters(clusters):
-    summary = []
+    resumo = []
 
     for cluster in clusters:
-        angles = np.array([angle for angle, length in cluster])
-        lengths = np.array([length for angle, length in cluster])
+        angulos = [c['angulo'] for c in cluster]
+        tamanhos = [c['tamanho'] for c in cluster]
 
-        avg_angle = np.mean(angles)
-        max_len = np.max(lengths)
+        resumo.append({
+            'angulo': np.mean(angulos),
+            'tamanho': np.max(tamanhos),
+            'coords': max(cluster, key=lambda c: c['tamanho'])['coords']
+        })
 
-        summary.append((max_len, avg_angle))
+    resumo = sorted(resumo, key=lambda c: c['tamanho'], reverse=True)
 
-    summary.sort(reverse=True)
+    return resumo
 
-    return summary
-
-def tempoAngulo(anguloH, anguloM):
-    razaoH = anguloH / 360.
-    razaoM = anguloM / 360.
-
-    horas = razaoH * 12
-    minutos = int(round(razaoM * 60)) % 60
-
-    if abs(minutos - 60) < 5 or minutos < 5:
-        horas = int(round(horas))
-    else:
-        horas = math.floor(horas)
+# CONVERTER ÂNGULO -> TEMPO
+def anguloParaTempo(angulo_hora, angulo_minuto):
+    minutos = int(round(angulo_minuto / 6.0)) % 60
+    horas = int(angulo_hora / 30.0)
+    horas = horas % 12
 
     if horas == 0:
         horas = 12
 
+    return horas, minutos
+
+# LEITURA DO RELÓGIO
+def lerRelogio(img):
+    # resize
+    img = resizeImagem(img, 500)
+    output = img.copy()
+
+    # preprocessamento
+    gray = preprocessamentoCV(img)
+
+    # detectar círculo
+    circulo = detectarCirculo(gray)
+
+    if circulo is None:
+        print("Círculo não encontrado")
+        return None
+
+    cx, cy, raio = circulo
+
+    # desenha círculo
+    cv.circle(output, (cx, cy), raio, (0, 255, 0), 2)
+    cv.circle(output, (cx, cy), 3, (255, 0, 0), -1)
+
+    # bordas
+    edges = cv.Canny(gray, 50, 150)
+
+    # linhas
+    linhas = detectarLinhas(edges)
+    ponteiros = filtrarLinhas(linhas, cx, cy, raio)
+    clusters = clusterizarPonteiros(ponteiros)
+
+    if len(clusters) < 2:
+        print("Não foi possível detectar ponteiros suficientes")
+        return None
+
+    # maior = minuto
+    ponteiro_minuto = clusters[0]
+
+    # segundo maior = hora
+    ponteiro_hora = clusters[1]
+
+    # desenhar ponteiros
+    for p in [ponteiro_minuto, ponteiro_hora]:
+        x1, y1, x2, y2 = p['coords']
+
+        cv.line(output, (x1, y1), (x2, y2), (0, 0, 255), 3)
+
+    # tempo
+    horas, minutos = anguloParaTempo(
+        ponteiro_hora['angulo'],
+        ponteiro_minuto['angulo']
+    )
+
+    print(f"Hora detectada: {horas:02d}:{minutos:02d}")
+
+    # mostrar
+    rgb = cv.cvtColor(output, cv.COLOR_BGR2RGB)
+    plt.figure(figsize=(8, 8))
+    plt.imshow(rgb)
+    plt.axis('off')
+    plt.show()
 
     return horas, minutos
 
-def tellTime(img):
-    processed = preprocess(img)
-    edges = cv.Canny(processed, 100, 200)
-    linhas = findLines(edges)
+# MAIN
+caminho = "imagem4.jpg"
 
-    centroX = img.shape[1]/2
-    centroY = img.shape[0]/2
+img = cv.imread(caminho)
 
-    raio = 50
+if img is None:
+    print("Erro ao carregar imagem")
+    exit()
 
-    ponteiros = encontraPonteiros(linhas, centroX, centroY, raio)
+# detectar relógio
+bbox = detectarRelogio(img)
 
-    clusters = clusterLinhas(ponteiros)
-    sumario = sumarizarClusters(clusters)
+if bbox is None:
+    print("Nenhum relógio detectado")
+    exit()
 
-    if len(sumario) == 1: sumario.append(sumario[0])
+x1, y1, x2, y2 = bbox
 
-    horas, minutos = tempoAngulo(sumario[1][1], sumario[0][1])
+# desenhar bbox
+img_box = img.copy()
+cv.rectangle(img_box, (x1, y1), (x2, y2), (255, 0, 0), 3)
 
-    for linha in linhas:
-        for x1, y1, x2, y2 in linha:
-            if proximaCentro(x1, y1, x2, y2, centroX, centroY, raio):
-                cv.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    
-    cv.imshow("lines", img)
-    cv.imshow("edges", edges)
+# crop do relógio
+crop = img[y1:y2, x1:x2]
 
-    return horas, minutos
+# visualizar detecção
+rgb = cv.cvtColor(img_box, cv.COLOR_BGR2RGB)
+plt.figure(figsize=(8, 8))
+plt.imshow(rgb)
+plt.axis('off')
+plt.show()
 
+# ler relógio
+resultado = lerRelogio(crop)
 
+if resultado is not None:
+    horas, minutos = resultado
+    print(f"Resultado final: {horas:02d}:{minutos:02d}")
