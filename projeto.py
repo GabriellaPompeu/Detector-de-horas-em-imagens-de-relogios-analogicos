@@ -1,8 +1,10 @@
 from ultralytics import YOLO
+from pathlib import Path
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
 import math
+import os
 
 # MODELO YOLO SEGMENTATION
 model = YOLO("yolov8n-seg.pt")
@@ -248,15 +250,10 @@ def clusterizarPonteiros(ponteiros, raio, tolerancia=8):
         tamanho_medio = np.mean(tamanhos)
 
         resumo.append({
-
             "angulo": np.mean(angulos),
-
             "tamanho": tamanho_medio,
-
             "coords": coords,
-
             "linhas": len(cluster),
-
             "razao_raio": tamanho_medio / raio
         })
 
@@ -329,7 +326,7 @@ def anguloParaTempo(angulo_hora, angulo_minuto):
     return horas, minutos
 
 # LEITURA DO RELÓGIO
-def lerRelogio(img, mask_segmentacao):
+def lerRelogio(img, mask_segmentacao, nome):
     img = resizeImagem(img, 500)
 
     # resize máscara
@@ -475,10 +472,22 @@ def lerRelogio(img, mask_segmentacao):
         3
     )
 
-    nick = caminho.replace(".jpg", "Resultado.jpg")
+    # Definir a pasta de destino
+    pasta_destino = "resultados"
+
+    # Criar a pasta se não existir
+    os.makedirs(pasta_destino, exist_ok=True)
+
+    # Monta um nome característico pros resultados
+    nome_base = Path(nome).stem
+    nick = f"{nome_base}_resultado.jpg"
+    
+    # Caminho completo para salvar
+    caminho_saida = os.path.join(pasta_destino, nick)
+
     # salvar resultado
     cv.imwrite(
-        nick,
+        caminho_saida,
         output
     )
 
@@ -498,55 +507,113 @@ def lerRelogio(img, mask_segmentacao):
 
     return horas, minutos
 
+# LISTAR IMAGENS
+def listar_imagens(pasta):
+    """
+    Lista todos os arquivos de imagem de uma pasta.
+    """
+
+    if not os.path.isdir(pasta):
+        raise FileNotFoundError(
+            f"A pasta '{pasta}' não existe."
+        )
+
+    extensoes = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".bmp",
+        ".tiff",
+        ".gif"
+    }
+
+    imagens = []
+
+    for arquivo in Path(pasta).iterdir():
+
+        if (
+            arquivo.is_file()
+            and arquivo.suffix.lower() in extensoes
+        ):
+
+            imagens.append(
+                str(arquivo.resolve())
+            )
+
+    return imagens
+
+# =========================================================
+
 # MAIN
-caminho = "imagem1.jpg"
-img = cv.imread(caminho)
+if __name__ == "__main__":
+    pasta_alvo = "imagens"
 
-if img is None:
-    print("Erro ao carregar imagem")
-    exit()
+    try:
+        lista = listar_imagens(pasta_alvo)
 
-resultado = detectarRelogio(img)
+        # VERIFICA SE EXISTEM IMAGENS
+        if not lista:
+            print("Nenhuma imagem encontrada.")
+            exit()
 
-if resultado is None:
-    print("Nenhum relógio detectado")
-    exit()
+        print(f"{len(lista)} imagens encontradas.")
 
-crop, mask, bbox = resultado
+        # LOOP NAS IMAGENS
+        for caminho in lista:
+            print(f"\nProcessando: {caminho}")
+            img = cv.imread(caminho)
 
-x1, y1, x2, y2 = bbox
+            if img is None:
+                print("Erro ao carregar imagem.")
+                continue
 
-# visualizar detecção
-img_box = img.copy()
+            # DETECÇÃO DO RELÓGIO
+            resultado = detectarRelogio(img)
 
-cv.rectangle(
-    img_box,
-    (x1, y1),
-    (x2, y2),
-    (255,0,0),
-    3
-)
+            if resultado is None:
+                print("Nenhum relógio detectado.")
+                continue
 
-rgb = cv.cvtColor(
-    img_box,
-    cv.COLOR_BGR2RGB
-)
+            crop, mask, bbox = resultado
 
-plt.figure(figsize=(8,8))
-plt.imshow(rgb)
-plt.axis("off")
-plt.title("Relógio detectado")
-plt.show()
+            x1, y1, x2, y2 = bbox
 
-# ler relógio
-resultado = lerRelogio(
-    crop,
-    mask
-)
+            # DESENHAR BBOX
+            img_box = img.copy()
 
-if resultado is not None:
-    horas, minutos = resultado
-    print(
-        f"Resultado final: "
-        f"{horas:02d}:{minutos:02d}"
-    )
+            cv.rectangle(
+                img_box,
+                (x1, y1),
+                (x2, y2),
+                (255, 0, 0),
+                3
+            )
+
+            # VISUALIZAR DETECÇÃO
+            rgb = cv.cvtColor(
+                img_box,
+                cv.COLOR_BGR2RGB
+            )
+
+            plt.figure(figsize=(8, 8))
+            plt.imshow(rgb)
+            plt.axis("off")
+            plt.title("Relógio detectado")
+            plt.show()
+
+            # LEITURA DO RELÓGIO
+            resultado_hora = lerRelogio(
+                crop,
+                mask,
+                caminho
+            )
+
+            if resultado_hora is not None:
+                horas, minutos = resultado_hora
+                print(f"Resultado final: {horas:02d}:{minutos:02d}")
+
+            else:
+                print("Falha na leitura do relógio.")
+
+    except Exception as e:
+        print(f"Erro: {e}")
