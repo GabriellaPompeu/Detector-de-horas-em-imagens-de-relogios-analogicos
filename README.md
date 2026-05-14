@@ -21,30 +21,6 @@ O pipeline desenvolvido é dividido em oito etapas principais:
 - Identificação dos ponteiros corretos;
 - Conversão angular para tempo.
 
-Imagem original
-        ↓
-YOLO Segmentation
-        ↓
-Recorte do relógio
-        ↓
-Remoção de fundo
-        ↓
-Pré-processamento
-        ↓
-Detecção do círculo
-        ↓
-Extração de bordas
-        ↓
-Detecção de linhas
-        ↓
-Filtragem geométrica
-        ↓
-Clusterização angular
-        ↓
-Separação dos ponteiros
-        ↓
-Conversão ângulo → tempo
-
 ## Desafios encontrados:
 Estes foram os desafios encontrados e solucionados com sucesso parcial.
 - localizar o relógio na imagem
