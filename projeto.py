@@ -507,11 +507,9 @@ def lerRelogio(img, mask_segmentacao, nome):
 
     return horas, minutos
 
+# Lista todos os arquivos de imagem de uma pasta.
 # LISTAR IMAGENS
 def listar_imagens(pasta):
-    """
-    Lista todos os arquivos de imagem de uma pasta.
-    """
 
     if not os.path.isdir(pasta):
         raise FileNotFoundError(
