@@ -80,4 +80,48 @@ def linha_media(linhas: list[Linha]) -> Linha:
 
     return Linha(x1, y1, x2, y2)
 
+
+class Relogio:
+    def __init__(self, circulo: Circulo, ponteiro_m: Linha, ponteiro_h: Linha):
+        self.circulo = circulo
+        self.ponteiro_m = ponteiro_m
+        self.ponteiro_h = ponteiro_h
+        self.cx = circulo.cx
+        self.cy = circulo.cy
+    
+    def _angulo_do_ponteiro(self, pont:Linha) -> float:
+        '''Angulo baseado no centro do relógio e a ponta do ponteiro.'''
+        p = pont.ponta_mais_distante((self.cx, self.cy))
+        angulo = math.degrees(math.atan2(p[1] - self.cy, p[0] - self.cx)) + 90
+        if angulo < 0:
+            angulo += 360
+        return angulo
+
+    def angulo_do_ponteiro_minuto(self) -> float:
+        return self._angulo_do_ponteiro(self.ponteiro_m)
+    
+    def angulo_do_ponteiro_hora(self) -> float:
+        return self._angulo_do_ponteiro(self.ponteiro_h)
+
+    def calcular_hora(self) -> tuple[int]:
+        angulo_hora = self.angulo_do_ponteiro_hora()
+        angulo_minuto = self.angulo_do_ponteiro_minuto()
+        #print(angulo_hora, angulo_minuto)
+        horas = angulo_hora / 30
+        minutos = (angulo_minuto / 6) % 60
         
+        # se estiver muito perto de uma hora,
+        # arredonda de forma inteligente baseado nos minutos
+        if abs(horas - round(horas)) < .1:
+            if minutos > 30:
+                horas = round(horas) - 1
+            else:
+                horas = round(horas)
+        
+        horas = int(horas)
+        minutos = int(minutos)
+
+        if horas == 0:
+            horas = 12
+
+        return horas, minutos
