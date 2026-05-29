@@ -42,11 +42,31 @@ def resizeImagem(img: Img, largura=500) -> Img:
     return cv.resize(img, (largura, nova_altura))
 
 
-def detectarRelogio(img: Img) -> tuple[Img, Img, any] | None:
+class ResultadoDeteccao:
+    def __init__(self, crop: Img = None, mask: Img = None, bbox: tuple = None):
+        self.crop = crop
+        self.mask = mask
+        self.bbox = bbox
+        self.falho = mask is None or crop is None
+
+
+def visualizar_deteccao(output: Img, dados: ResultadoDeteccao):
+    x1, y1, x2, y2 = dados.bbox
+    cv.rectangle(output, (x1, y1), (x2, y2), (255, 0, 0), 3)
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(cv.cvtColor(output, cv.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.title("Relógio detectado")
+    plt.show()
+
+
+
+def detectarRelogio(img: Img) -> ResultadoDeteccao:
     results = model(img, verbose=False)[0]
 
     if results.masks is None:
-        return None
+        return ResultadoDeteccao()
 
     melhor_score = 0
     melhor_crop = None
@@ -87,10 +107,7 @@ def detectarRelogio(img: Img) -> tuple[Img, Img, any] | None:
             melhor_mask = mask_crop
             melhor_box = (x1, y1, x2, y2)
 
-    if melhor_crop is None:
-        return None
-
-    return melhor_crop, melhor_mask, melhor_box
+    return ResultadoDeteccao(melhor_crop, melhor_mask, melhor_box)
 
 
 def removerFundo(img: Img, mask):
@@ -234,6 +251,39 @@ def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> t
     return ponteiro_minuto, ponteiro_hora
 
 
+class ResultadoLeitura:
+    def __init__(self, circulos: list[Circulo], circulo: Circulo, relogio: Relogio, horas: int, minutos: int, falho=False):
+        self.circulos = circulos
+        self.circulo = circulo
+        self.relogio = relogio
+        self.horas = horas
+        self.minutos = minutos
+        self.falho = falho
+    
+    def texto_tempo(self) -> str:
+        return f"{self.horas:02d}:{self.minutos:02d}"
+
+
+def visualizar_leitura(output:Img, resize: int, dados: ResultadoLeitura):
+    output = resizeImagem(output, resize)
+    for c in dados.circulos:
+        c.desenhar(output, (50, 50, 50), 2)
+    dados.circulo.desenhar(output, (0, 255, 0), 2)
+    dados.circulo.desenhar_centro(output, (0, 255, 0), 3)
+    
+    dados.relogio.ponteiro_m.desenhar(output, (0, 0, 255), 4)
+    dados.relogio.ponteiro_h.desenhar(output, (255, 0, 0), 4)
+
+    cv.rectangle(output, (10, 10), (220, 70), (255,255,255), -1)
+    cv.putText(output, dados.texto_tempo(), (20, 55), cv.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,0), 3)
+
+    plt.figure(figsize=(8,8))
+    plt.imshow(cv.cvtColor(output, cv.COLOR_BGR2RGB))
+    plt.axis("off")
+    plt.title(f"Hora predita: {dados.texto_tempo()}")
+    plt.show()
+
+
 def melhor_circulo(img: Img):
     def calc(c: Circulo):
         ponto_central = img.shape[0] / 2, img.shape[1] / 2
@@ -241,22 +291,20 @@ def melhor_circulo(img: Img):
     return calc
 
 
-def lerRelogio(img: Img, mask_segmentacao: Img, nome_output: str):
-    img = resizeImagem(img, 500)
+def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura:
+    img = resizeImagem(img, resize)
     mask_segmentacao = cv.resize(mask_segmentacao, (img.shape[1], img.shape[0]))
-
-    output = img.copy()
 
     # remove fundo
     sem_fundo, mask = removerFundo(img, mask_segmentacao)
 
     gray = preprocessamentoCV(sem_fundo)
     circulos = detectarCirculos(gray)
-    circulo = sorted(circulos, key=melhor_circulo(img))[0]
+    if len(circulos) == 0:
+        print("Círculos não encontrados")
+        return ResultadoLeitura(circulos, None, None, None, None, True)
 
-    if circulo is None:
-        print("Círculo não encontrado")
-        return None
+    circulo = sorted(circulos, key=melhor_circulo(img))[0]
 
     # máscara circular interna
     mask_clock = np.zeros_like(gray)
@@ -269,36 +317,28 @@ def lerRelogio(img: Img, mask_segmentacao: Img, nome_output: str):
     edges = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel)
     
     linhas = detectarLinhas(edges)
+    #---------------------------------
+    '''k = 0
+    img_li = img.copy()
+    for l in linhas:
+        l.desenhar(img_li, (255, 0, k), 2)
+        k += 31
+        if k > 255:
+            k -= 255
+    plt.imshow(cv.cvtColor(img_li, cv.COLOR_BGR2RGB))
+    plt.show()'''
+    #---------------------------------
+
     ponteiros = filtrarLinhas(linhas, circulo)
     clusters = clusterizarPonteiros(ponteiros, circulo.raio)
 
     if len(clusters) < 2:
         print("Ponteiros insuficientes")
-        return None
+        return ResultadoLeitura(circulos, circulo, None, None, None, True)
 
     relogio = Relogio(circulo, *clusters)
     horas, minutos = relogio.calcular_hora()
 
-    texto = f"{horas:02d}:{minutos:02d}"
-    print(f"Hora detectada: {texto}")
+    dados = ResultadoLeitura(circulos, circulo, relogio, horas, minutos)
 
-    for c in circulos:
-        c.desenhar(output, (50, 50, 50), 2)
-    circulo.desenhar(output, (0, 255, 0), 2)
-    circulo.desenhar_centro(output, (0, 255, 0), 3)
-    
-    relogio.ponteiro_m.desenhar(output, (0, 0, 255), 4)
-    relogio.ponteiro_h.desenhar(output, (255, 0, 0), 4)
-
-    cv.rectangle(output, (10, 10), (220, 70), (255,255,255), -1)
-    cv.putText(output, texto, (20, 55), cv.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,0), 3)
-
-    arquivos.salvar_imagem(output, nome_output)
-
-    plt.figure(figsize=(8,8))
-    plt.imshow(cv.cvtColor(output, cv.COLOR_BGR2RGB))
-    plt.axis("off")
-    plt.title(f"Hora predita: {texto}")
-    plt.show()
-
-    return horas, minutos
+    return dados

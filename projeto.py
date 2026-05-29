@@ -15,13 +15,13 @@ ARTE_CAPA = '''
 ▐█▪ ▐█▌▐▀▀▪▄ ▐█.▪▐▀▀▪▄██ ▄▄ ▐█.▪▐█▌.▐▌▐▀▀▄   ▐█▪ ▐█▌▐▀▀▪▄  ██▀▀█▐█▌.▐▌▐▀▀▄ ▄█▀▀█ ▄▀▀▀█▄
 ██. ██ ▐█▄▄▌ ▐█▌·▐█▄▄▌▐███▌ ▐█▌·▐█▌.▐▌▐█•█▌  ██. ██ ▐█▄▄▌  ██▌▐▀▐█▌.▐▌▐█•█▌▐█▪ ▐▌▐█▄▪▐█
 ▀▀▀▀▀•  ▀▀▀  ▀▀▀  ▀▀▀ ·▀▀▀  ▀▀▀  ▀█▄▀▪.▀  ▀  ▀▀▀▀▀•  ▀▀▀   ▀▀▀ · ▀█▄▀▪.▀  ▀ ▀  ▀  ▀▀▀▀ 
-  ╔═════╗
- ╔╝  │  ╚╗
-╔╝   │   ╚╗
-║    └─── ║
-╚╗       ╔╝
- ╚╗     ╔╝
-  ╚═════╝'''
+  ╔═══════╗
+ ╔╝   │   ╚╗
+╔╝    │    ╚╗
+║     └───  ║
+╚╗         ╔╝
+ ╚╗       ╔╝
+  ╚═══════╝'''
 
 
 def deteccao_geral():
@@ -35,43 +35,41 @@ def deteccao_geral():
 
     print(f"{len(lista)} imagens encontradas.")
 
+    erros = 0
     for caminho in lista:
-        print(f"\nProcessando: {caminho}")
+        print(f"\nProcessando: ...{caminho[50:]}")
         img = cv.imread(caminho)
 
         if img is None:
             print("Erro ao carregar imagem.")
             continue
 
-        # DETECÇÃO DO RELÓGIO
-        resultado = visao.detectarRelogio(img)
-
-        if resultado is None:
+        resultado_deteccao = visao.detectarRelogio(img)
+        
+        if resultado_deteccao.falho:
+            erros += 1
             print("Nenhum relógio detectado.")
             continue
+        
+        visao.visualizar_deteccao(img.copy(), resultado_deteccao)
 
-        crop, mask, bbox = resultado
-        x1, y1, x2, y2 = bbox
+        resize_leitura = 500
+        resultado_hora = visao.lerRelogio(resultado_deteccao.crop, resize_leitura, resultado_deteccao.mask)
 
-        img_box = img.copy()
-
-        cv.rectangle(img_box, (x1, y1), (x2, y2), (255, 0, 0), 3)
-
-        # VISUALIZAR DETECÇÃO
-        plt.figure(figsize=(8, 8))
-        plt.imshow(cv.cvtColor(img_box, cv.COLOR_BGR2RGB))
-        plt.axis("off")
-        plt.title("Relógio detectado")
-        plt.show()
-
-        resultado_hora = visao.lerRelogio(crop, mask, caminho)
-
-        if resultado_hora is not None:
-            horas, minutos = resultado_hora
-            print(f"Resultado final: {horas:02d}:{minutos:02d}")
-
-        else:
+        if resultado_hora.falho:
+            erros += 1
             print("Falha na leitura do relógio.")
+            continue
+        
+        output = resultado_deteccao.crop.copy()
+        visao.visualizar_leitura(output, resize_leitura, resultado_hora)
+        print(f"Resultado final: {resultado_hora.texto_tempo()}")
+        arquivos.salvar_imagem(output, caminho)
+
+    
+    n_acertos = len(lista) - erros
+    print(f'({(n_acertos) * 100/len(lista):.2f}%) {n_acertos}/{len(lista)} das imagens funcionaram.')
+
 
 if __name__ == "__main__":
     print(ARTE_CAPA)
