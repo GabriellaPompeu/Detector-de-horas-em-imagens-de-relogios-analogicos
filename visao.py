@@ -146,10 +146,16 @@ def detectarCirculos(gray: Img) -> list[Circulo]:
 
 
 def detectarLinhas(edges) -> list[Linha]:
+    #antes estava: threshold=45, minLineLength=40, maxLineGap=10
     linhas = cv.HoughLinesP(edges, rho=1, theta=np.pi / 180,
                             threshold=45, minLineLength=40, maxLineGap=10)
-    if len(linhas) == 0:
-        raise(Exception('sem linhas detectadas')) # -------------------------------------------- teste
+    if linhas is None or len(linhas) == 0:
+        # mais sensível
+        linhas = cv.HoughLinesP(edges, rho=1, theta=np.pi/180,
+                                threshold=30, minLineLength=25, maxLineGap=15)
+    if linhas is None or len(linhas) == 0:
+        #raise(Exception('sem linhas detectadas')) # -------------------------------------------- teste
+        return []  # não quebra
     return [Linha(*l[0]) for l in linhas]
 
 
@@ -189,7 +195,7 @@ def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> t
     if not ponteiros:
         return []
 
-    ponteiros.sort(key=lambda p: p.get_angulo())
+    ponteiros = sorted(ponteiros, key=lambda p: p.get_angulo())
     
     clusters = [[ponteiros[0]]]
 
@@ -201,7 +207,12 @@ def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> t
             clusters[-1].append(atual)
         else:
             clusters.append([atual])
-
+    if len(clusters) > 1:
+        ang_primeiro = clusters[0][0].get_angulo()
+        ang_ultimo = clusters[-1][-1].get_angulo()
+        distancia_circular = (180 - ang_ultimo) + ang_primeiro
+        if distancia_circular <= tolerancia:
+            clusters[0] = clusters.pop() + clusters[0]
 
     candidatos = []
 
@@ -244,12 +255,49 @@ def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> t
             ponteiro_hora = c
             break
     
-    # fallback
+    # garantia
     if ponteiro_hora is None:
         ponteiro_hora = candidatos[1]
 
     return ponteiro_minuto, ponteiro_hora
 
+def estimar_espessura_ponteiro(mask_relogio_bin: Img, ponteiro: Linha, circulo: Circulo, amostras=5) -> float:
+    # mede quantos pixels da máscara tem na direção PERPENDICULAR ao ponteiro (espessura em pixels)
+    dx = ponteiro.x2 - ponteiro.x1
+    dy = ponteiro.y2 - ponteiro.y1
+    comprimento = math.hypot(dx, dy)
+    if comprimento == 0:
+        return 0.0
+ 
+    # vetor perpendicular normalizado
+    px, py = -dy / comprimento, dx / comprimento
+ 
+    espessuras = []
+    for t in np.linspace(0.2, 0.8, amostras):
+        cx_amostra = ponteiro.x1 + dx * t
+        cy_amostra = ponteiro.y1 + dy * t
+ 
+        # caminha pra cada lado perpendicular até achar a borda da máscara
+        passo = 0
+        max_passo = int(circulo.raio * 0.15)  # não deveria precisar de mais que isso
+        while passo < max_passo:
+            xa = int(cx_amostra + px * passo)
+            ya = int(cy_amostra + py * passo)
+            xb = int(cx_amostra - px * passo)
+            yb = int(cy_amostra - py * passo)
+ 
+            dentro_a = (0 <= ya < mask_relogio_bin.shape[0] and 0 <= xa < mask_relogio_bin.shape[1]
+                        and mask_relogio_bin[ya, xa] > 0)
+            dentro_b = (0 <= yb < mask_relogio_bin.shape[0] and 0 <= xb < mask_relogio_bin.shape[1]
+                        and mask_relogio_bin[yb, xb] > 0)
+ 
+            if not dentro_a and not dentro_b:
+                break
+            passo += 1
+ 
+        espessuras.append(passo * 2)
+ 
+    return float(np.mean(espessuras)) if espessuras else 0.0
 
 class ResultadoLeitura:
     def __init__(self, circulos: list[Circulo], circulo: Circulo, relogio: Relogio, horas: int, minutos: int, falho=False):
@@ -286,24 +334,136 @@ def visualizar_leitura(output:Img, resize: int, dados: ResultadoLeitura):
 
 def melhor_circulo(img: Img):
     def calc(c: Circulo):
+        cx_imagem = img.shape[1] / 2
+        cy_imagem = img.shape[0] / 2
         ponto_central = img.shape[0] / 2, img.shape[1] / 2
-        return math.dist((c.cx, c.cy), ponto_central) * 2 - c.raio
+        return math.dist((c.cx, c.cy), (cx_imagem, cy_imagem)) * 2 - c.raio
     return calc
 
+def ordenar_pontos(pontos):
+    #Ordena: [superior-esquerdo, superior-direito, inferior-direito, inferior-esquerdo]
+    ret = np.zeros((4, 2), dtype="float32")
+    
+    soma = pontos.sum(axis=1)
+    ret[0] = pontos[np.argmin(soma)]  # Superior-Esquerdo
+    ret[2] = pontos[np.argmax(soma)]  # Inferior-Direito
+    
+    diff = np.diff(pontos, axis=1)
+    ret[1] = pontos[np.argmin(diff)]  # Superior-Direito
+    ret[3] = pontos[np.argmax(diff)]  # Inferior-Esquerdo
+    
+    return ret
 
 def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura:
     img = resizeImagem(img, resize)
     mask_segmentacao = cv.resize(mask_segmentacao, (img.shape[1], img.shape[0]))
+    circulo_pre_definido = None
+
+    if mask_segmentacao is not None:
+        # converte para 8 bits se necessário (para usar no findContours)
+        if mask_segmentacao.dtype != np.uint8: #precisamos de 8 bits
+            mask_para_contorno = (mask_segmentacao > 0.5).astype(np.uint8) * 255
+        else:
+            mask_para_contorno = mask_segmentacao
+
+        contornos, _ = cv.findContours(mask_para_contorno, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+        if contornos:
+            maior_contorno = max(contornos, key=cv.contourArea)
+            
+            area = cv.contourArea(maior_contorno)
+            
+            # Opção 1: Tentar encontrar um polígono (para quadrados/retângulos)
+            epsilon = 0.02 * cv.arcLength(maior_contorno, True)
+            approx = cv.approxPolyDP(maior_contorno, epsilon, True)
+
+            if len(approx) == 4:
+                print("Relógio quadrado/retângulo detectado. Corrigindo perspectiva...")
+                
+                pts_origem = ordenar_pontos(approx.reshape(4, 2))
+                
+                (tl, tr, br, bl) = pts_origem
+                largura = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
+                altura = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+                
+                pts_destino = np.float32([
+                    [0, 0],
+                    [largura - 1, 0],
+                    [largura - 1, altura - 1],
+                    [0, altura - 1]
+                ])
+                
+                # homografia
+                h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
+                if h is not None:
+                    img = cv.warpPerspective(img, h, (largura, altura))
+                    mask_segmentacao = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
+                    
+                    # cria um círculo artificial
+                    cx = largura // 2
+                    cy = altura // 2
+                    # diametro = 90% do menor lado (evita bordas)
+                    raio = int(min(largura, altura) * 0.45)
+                    circulo_pre_definido = Circulo(cx, cy, raio)
+            
+            # Opção 2: Se relógio não for quadrado, usa a elipse (para redondos)
+            elif len(maior_contorno) >= 5 and area > 1000:
+                print("Relógio redondo detectado. Corrigindo perspectiva com elipse...")
+                ellipse = cv.fitEllipse(maior_contorno)
+                (cx, cy), (d1, d2), angulo = ellipse
+
+                # Calcula os semi-eixos
+                raio_maior = max(d1, d2) / 2.0
+                raio_menor = min(d1, d2) / 2.0
+                
+                if angulo > 90:
+                    angulo = angulo - 90
+                else:
+                    angulo = angulo + 90
+                
+                ang_rad = math.radians(angulo)
+                
+                # Pontos dos eixos maior e menor da elipse
+                p1x = int(cx + raio_maior * math.cos(ang_rad))
+                p1y = int(cy + raio_maior * math.sin(ang_rad))
+                p2x = int(cx - raio_maior * math.cos(ang_rad))
+                p2y = int(cy - raio_maior * math.sin(ang_rad))
+                p3x = int(cx + raio_menor * math.cos(ang_rad + math.pi/2))
+                p3y = int(cy + raio_menor * math.sin(ang_rad + math.pi/2))
+                p4x = int(cx - raio_menor * math.cos(ang_rad + math.pi/2))
+                p4y = int(cy - raio_menor * math.sin(ang_rad + math.pi/2))
+                
+                pts_origem = np.float32([[p1x, p1y], [p2x, p2y], [p3x, p3y], [p4x, p4y]])
+                
+                # Pontos de elipse para circulo
+                pts_destino = np.float32([
+                    [int(cx + raio_maior * math.cos(ang_rad)), int(cy + raio_maior * math.sin(ang_rad))],
+                    [int(cx - raio_maior * math.cos(ang_rad)), int(cy - raio_maior * math.sin(ang_rad))],
+                    [int(cx + raio_maior * math.cos(ang_rad + math.pi/2)), int(cy + raio_maior * math.sin(ang_rad + math.pi/2))],
+                    [int(cx - raio_maior * math.cos(ang_rad + math.pi/2)), int(cy - raio_maior * math.sin(ang_rad + math.pi/2))]
+                ])
+                
+                h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
+                if h is not None:
+                    altura, largura = img.shape[:2]
+                    img_corrigida = cv.warpPerspective(img, h, (largura, altura))
+                    mask_corrigida = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
+                    
+                    img = img_corrigida
+                    mask_segmentacao = mask_corrigida                
 
     # remove fundo
     sem_fundo, mask = removerFundo(img, mask_segmentacao)
 
     gray = preprocessamentoCV(sem_fundo)
-    circulos = detectarCirculos(gray)
-    if len(circulos) == 0:
-        print("Círculos não encontrados")
-        return ResultadoLeitura(circulos, None, None, None, None, True)
-
+    if circulo_pre_definido is not None:
+        circulo = circulo_pre_definido
+        circulos = [circulo] 
+    else:
+        # para relógios redondos
+        circulos = detectarCirculos(gray)
+        if circulos is None or len(circulos) == 0:
+            print("Círculos não encontrados")
+            return ResultadoLeitura(circulos, None, None, None, None, True)
     circulo = sorted(circulos, key=melhor_circulo(img))[0]
 
     # máscara circular interna

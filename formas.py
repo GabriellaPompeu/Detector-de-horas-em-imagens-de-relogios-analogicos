@@ -27,19 +27,20 @@ class Linha:
         self.angulo = None
     
     def get_comprimento(self) -> float:
-        if not self.comprimento:
+        if self.comprimento is None: #não recalcula quando é zero
             self.comprimento = math.dist((self.x1, self.y1), (self.x2, self.y2))
         return self.comprimento
 
     def get_angulo(self) -> float:
-        if not self.angulo:
+        if self.angulo is None: #não recalcula quando é zero
             dx = self.x2 - self.x1
             dy = self.y1 - self.y2
 
-            self.angulo = math.degrees(math.atan2(dy, dx))
-
-            if self.angulo < 0:
-                self.angulo += 360
+            #self.angulo = math.degrees(math.atan2(dy, dx))
+            ang = math.degrees(math.atan2(dy, dx))
+            self.angulo = ang % 180
+            #if self.angulo < 0:
+            #    self.angulo += 360
             
         return self.angulo
     
