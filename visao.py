@@ -7,11 +7,14 @@ import math
 import os
 import arquivos
 from formas import *
+import easyocr
 
 
 Img = cv.typing.MatLike
 # MODELO YOLO SEGMENTATION
 model = YOLO("yolov8n-seg.pt")
+
+reader = easyocr.Reader(['en'])  # 'en' para inglês (números também)
 
 
 def min_max(a, b):
@@ -120,6 +123,95 @@ def removerFundo(img: Img, mask):
 
     return resultado, mask_bin
 
+def encontrar_centro_12(imagem):
+    #Retorna: (x, y) ou None se não encontrar
+    
+    if len(imagem.shape) == 3:
+        imagem_gray = cv.cvtColor(imagem, cv.COLOR_BGR2GRAY)
+    else:
+        imagem_gray = imagem
+
+    # encontrar a caixa delimitadora do '12'
+    resultado = reader.readtext(imagem, allowlist='12', text_threshold=0.5)
+    
+    for (bbox, texto, confianca) in resultado:
+        if texto == '12' and confianca > 0.5:
+            # cantos da caixa delimitadora
+            pontos = np.array(bbox, dtype=np.float32).reshape(-1, 2)
+            
+            # máscara na imagem cinza para isolar o 12
+            mascara = np.zeros(imagem_gray.shape[:2], dtype=np.uint8)
+            cv.fillPoly(mascara, [pontos.astype(np.int32)], 255)
+            
+            # aplica para focar apenas no 12
+            regiao_12 = cv.bitwise_and(imagem_gray, imagem_gray, mask=mascara)
+            
+            cantos = cv.goodFeaturesToTrack(regiao_12, maxCorners=20, qualityLevel=0.01, minDistance=10)
+            
+            if cantos is not None:
+                # centro dos cantos detectados
+                centro_x = int(np.mean(cantos[:, 0, 0]))
+                centro_y = int(np.mean(cantos[:, 0, 1]))
+                return (centro_x, centro_y)
+            else:
+                # usa o centro da caixa delimitadora
+                x = int(np.mean([p[0] for p in pontos]))
+                y = int(np.mean([p[1] for p in pontos]))
+                return (x, y)
+    
+    # 2a tentativa: procurar número romano "XII"
+    resultado = reader.readtext(imagem, text_threshold=0.4)  # um pouco mais sensível
+    for (bbox, texto, confianca) in resultado:
+    
+        texto_clean = ''.join(texto.split()).upper()
+        if texto_clean == 'XII' and confianca > 0.4:
+             # cantos da caixa delimitadora
+            pontos = np.array(bbox, dtype=np.float32).reshape(-1, 2)
+            
+            # máscara na imagem cinza para isolar o 12
+            mascara = np.zeros(imagem_gray.shape[:2], dtype=np.uint8)
+            cv.fillPoly(mascara, [pontos.astype(np.int32)], 255)
+            
+            # aplica para focar apenas no 12
+            regiao_12 = cv.bitwise_and(imagem_gray, imagem_gray, mask=mascara)
+            
+            cantos = cv.goodFeaturesToTrack(regiao_12, maxCorners=20, qualityLevel=0.01, minDistance=10)
+            
+            if cantos is not None:
+                # centro dos cantos detectados
+                centro_x = int(np.mean(cantos[:, 0, 0]))
+                centro_y = int(np.mean(cantos[:, 0, 1]))
+                return (centro_x, centro_y)
+            else:
+                # usa o centro da caixa delimitadora
+                x = int(np.mean([p[0] for p in pontos]))
+                y = int(np.mean([p[1] for p in pontos]))
+                return (x, y)
+
+    return None
+
+def esta_12_em_cima(edges, circulo):
+
+    mask_coroa = np.zeros_like(edges, dtype=np.uint8)
+    cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 1.2), 255, -1)
+    cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 0.7), 0, -1)
+    regiao = cv.bitwise_and(edges, edges, mask=mask_coroa)
+    h, w = regiao.shape
+    metade_sup = regiao[0:circulo.cy, :]
+    metade_inf = regiao[circulo.cy:h, :]
+    soma_sup = np.sum(metade_sup > 0)
+    soma_inf = np.sum(metade_inf > 0)
+    return soma_sup > soma_inf
+
+def calcular_somas_bordas(edges, circulo):
+    mask_coroa = np.zeros_like(edges, dtype=np.uint8)
+    cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 0.95), 255, -1)
+    cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 0.7), 0, -1)
+    regiao = cv.bitwise_and(edges, edges, mask=mask_coroa)
+    h, w = regiao.shape
+    metade_sup = regiao[0:circulo.cy, :]
+    metade_inf = regiao[circulo.cy:h, :]
+    return np.sum(metade_sup > 0), np.sum(metade_inf > 0)
 
 def detectarCirculos(gray: Img) -> list[Circulo]:
     h, w = gray.shape[:2]
@@ -466,13 +558,99 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
             return ResultadoLeitura(circulos, None, None, None, None, True)
     circulo = sorted(circulos, key=melhor_circulo(img))[0]
 
+    
+    # --- DETECÇÃO DO 12
+    posicao_12 = encontrar_centro_12(img) #passa a colorida por causa do OCR
+
+    if posicao_12 is not None:
+        cx_12, cy_12 = posicao_12
+
+        # 12 tem que estar perto da BORDA do círculo
+        dist_12 = math.dist((cx_12, cy_12), (circulo.cx, circulo.cy))
+        if not (circulo.raio * 0.65 <= dist_12 <= circulo.raio * 1.15):
+            print(f"  -> '12' encontrado fora do raio esperado, ignorando!")
+            posicao_12 = None
+
+    if posicao_12 is not None:
+        cx_12, cy_12 = posicao_12
+        
+        # vetor do centro do relógio para o 12
+        vetor_x = cx_12 - circulo.cx
+        vetor_y = cy_12 - circulo.cy
+        
+        # ângulo do 12 em graus
+        angulo_atual = math.degrees(math.atan2(vetor_y, vetor_x))
+        
+        # para cima
+        angulo_alvo = -90
+        
+        # quanto precisamos rotacionar
+        #angulo_rotacao = angulo_atual - angulo_alvo
+        angulo_rotacao = (angulo_atual - angulo_alvo) % 360
+        if angulo_rotacao > 180:
+            angulo_rotacao -= 360
+        
+        print(f"  -> Ângulo do 12: {angulo_atual:.2f}°. Rotacionando: {angulo_rotacao:.2f}° para alinhar")
+        
+        # rotaciona
+        if abs(angulo_rotacao) > 1.0:  # só se o desvio for significativo
+            # rotaciona o círculo calculado
+            centro = (circulo.cx, circulo.cy)
+            
+            print(f"DEBUG: circulo = {circulo}")
+            print(f"DEBUG: circulo.cx = {circulo.cx}, circulo.cy = {circulo.cy}")
+            
+            if circulo is not None:
+                centro = (float(circulo.cx), float(circulo.cy))
+            else:
+                # usar o centro da imagem
+                h, w = img.shape[:2]
+                centro = (w / 2.0, h / 2.0)
+                print("  -> Aviso: circulo é None, usando centro da imagem")
+
+            if not isinstance(angulo_rotacao, (int, float)):
+                print(f"  -> Aviso: angulo_rotacao não é numérico ({angulo_rotacao}), ignorando rotação.")
+                angulo_rotacao = 0.0
+
+            M = cv.getRotationMatrix2D(centro, angulo_rotacao, 1.0)
+            img = cv.warpAffine(img, M, (img.shape[1], img.shape[0]), flags=cv.INTER_CUBIC)
+            mask_segmentacao = cv.warpAffine(mask_segmentacao, M, (mask_segmentacao.shape[1], mask_segmentacao.shape[0]), flags=cv.INTER_NEAREST)
+            
+            # recalcula o gray
+            sem_fundo, _ = removerFundo(img, mask_segmentacao)
+            gray = preprocessamentoCV(sem_fundo)
+    else:
+        print("  -> 12 não detectado. Verificando se está de cabeça para baixo")
+        #compara as bordas
+        edges_temp = cv.Canny(gray, 50, 150)
+        if esta_12_em_cima(edges_temp, circulo) is False:
+            # Só gira se tiver certeza que está invertido
+            soma_sup, soma_inf = calcular_somas_bordas(edges_temp, circulo)  # função auxiliar
+            if soma_inf > soma_sup * 1.5:  # só gira se a diferença for grande
+                print("    Evidência forte: relógio de cabeça para baixo. Rotacionando 180°.")
+                img = cv.rotate(img, cv.ROTATE_180)
+                mask_segmentacao = cv.rotate(mask_segmentacao, cv.ROTATE_180)
+                circulo.cx = img.shape[1] - circulo.cx
+                circulo.cy = img.shape[0] - circulo.cy
+                sem_fundo, _ = removerFundo(img, mask_segmentacao)
+                gray = preprocessamentoCV(sem_fundo)
+            else:
+                print("    Evidência fraca. Mantendo orientação atual.")
+        else:
+            print("    Relógio parece já estar em pé. Mantendo orientação.")
+
     # máscara circular interna
     mask_clock = np.zeros_like(gray)
     cv.circle(mask_clock, (circulo.cx, circulo.cy), int(circulo.raio * 0.92), 255, -1)
     gray = cv.bitwise_and(gray, gray, mask=mask_clock)
     
     # bordas
-    edges = cv.Canny(gray, 70, 180)
+    otsu_thresh, _ = cv.threshold(gray, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+    low = max(0, int(otsu_thresh * 0.5))
+    high = min(255, int(otsu_thresh * 1.5))
+    edges = cv.Canny(gray, low, high)
+    #edges = cv.Canny(gray, 70, 180)
+
     kernel = np.ones((3,3), np.uint8)
     edges = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel)
     

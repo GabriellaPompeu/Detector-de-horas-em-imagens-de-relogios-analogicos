@@ -79,15 +79,15 @@ if __name__ == "__main__":
 
     sair = False
     while not sair:
-        print('Digite "g" para ver a detecção de todos os relógios um por um.')
-        print('Digite "f" para calcular o resultado em todos os relógios')
+        print('Digite "a" para ver a detecção de todos os relógios um por um.')
+        #print('Digite "f" para calcular o resultado em todos os relógios')
         print('Digite qualquer outra coisa para sair.')
 
         comando = input()
-        if comando == 'g':
+        if comando == 'a':
             deteccao_geral()
-        elif comando == 'f':
-            pass
+        #elif comando == 'f':
+            #pass
         else:
             sair = True
 
