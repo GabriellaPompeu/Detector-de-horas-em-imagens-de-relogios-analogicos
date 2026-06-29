@@ -274,7 +274,7 @@ def filtrarLinhas(linhas:list[Linha], circulo:Circulo) -> list[Linha]:
             continue
         
         # ponta da linha deve ficar dentro do relógio
-        tol_raio = 1.05
+        tol_raio = 1.15 #era 1.05
         if d_ponta > circulo.raio * tol_raio:
             continue
         
@@ -472,11 +472,11 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
                 print("Relógio quadrado/retângulo detectado. Corrigindo perspectiva...")
                 
                 pts_origem = ordenar_pontos(approx.reshape(4, 2))
-                
+
                 (tl, tr, br, bl) = pts_origem
                 largura = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
                 altura = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
-                
+
                 pts_destino = np.float32([
                     [0, 0],
                     [largura - 1, 0],
@@ -541,7 +541,7 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
                     mask_corrigida = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
                     
                     img = img_corrigida
-                    mask_segmentacao = mask_corrigida                
+                    mask_segmentacao = mask_corrigida            
 
     # remove fundo
     sem_fundo, mask = removerFundo(img, mask_segmentacao)
@@ -669,6 +669,22 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
 
     ponteiros = filtrarLinhas(linhas, circulo)
     clusters = clusterizarPonteiros(ponteiros, circulo.raio)
+
+    # se faltam ponteiros, tenta de novo com bordas mais sensíveis
+    if len(clusters) < 2:
+        print("Poucos ponteiros no 1º passe. Tentando detecção mais sensível...")
+        edges2 = cv.Canny(gray, max(0, low // 2), high)
+        edges2 = cv.dilate(edges2, kernel, iterations=1)
+        edges2 = cv.morphologyEx(edges2, cv.MORPH_CLOSE, kernel)
+        linhas2 = cv.HoughLinesP(edges2, rho=1, theta=np.pi / 180,
+                                 threshold=25, minLineLength=int(circulo.raio * 0.3),
+                                 maxLineGap=20)
+        if linhas2 is not None:
+            linhas2 = [Linha(*l[0]) for l in linhas2]
+            ponteiros2 = filtrarLinhas(linhas2, circulo)
+            clusters2 = clusterizarPonteiros(ponteiros2, circulo.raio)
+            if len(clusters2) >= 2:
+                clusters = clusters2
 
     if len(clusters) < 2:
         print("Ponteiros insuficientes")
