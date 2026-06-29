@@ -27,10 +27,16 @@ def preprocessamentoCV(img: Img) -> Img:
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
     # melhora contraste
-    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #gray = clahe.apply(gray)
 
-    gray = clahe.apply(gray)
-
+    #gray = cv.equalizeHist(gray) #ruim
+    #gray = np.array(((gray / 255) ** 2) * 255, dtype=gray.dtype) #quase
+    #gray = np.array(((((gray / 255) - 0.5)/4) ** 0.33333 + 0.5) * 255, dtype=gray.dtype) #sem controle
+    x = (gray / 255)
+    forca = 2
+    gray = np.array(((x ** forca) / (x ** forca + (1 - x) ** forca)) * 255, dtype=gray.dtype)
+    
     # preserva bordas
     gray = cv.bilateralFilter(gray, 7, 50, 50)
 
@@ -136,6 +142,7 @@ def encontrar_centro_12(imagem):
     
     for (bbox, texto, confianca) in resultado:
         if texto == '12' and confianca > 0.5:
+            return ((bbox[0][0] + bbox[2][0])/2, (bbox[0][1] + bbox[2][1])/2)
             # cantos da caixa delimitadora
             pontos = np.array(bbox, dtype=np.float32).reshape(-1, 2)
             
@@ -165,7 +172,8 @@ def encontrar_centro_12(imagem):
     
         texto_clean = ''.join(texto.split()).upper()
         if texto_clean == 'XII' and confianca > 0.4:
-             # cantos da caixa delimitadora
+            return ((bbox[0][0] + bbox[2][0])/2, (bbox[0][1] + bbox[2][1])/2)
+            # cantos da caixa delimitadora
             pontos = np.array(bbox, dtype=np.float32).reshape(-1, 2)
             
             # máscara na imagem cinza para isolar o 12
@@ -228,7 +236,7 @@ def detectarCirculos(gray: Img) -> list[Circulo]:
     )
 
     if circles is None:
-        return None
+        return []
 
     circles = np.round(circles[0]).astype(int)
 
@@ -428,7 +436,6 @@ def melhor_circulo(img: Img):
     def calc(c: Circulo):
         cx_imagem = img.shape[1] / 2
         cy_imagem = img.shape[0] / 2
-        ponto_central = img.shape[0] / 2, img.shape[1] / 2
         return math.dist((c.cx, c.cy), (cx_imagem, cy_imagem)) * 2 - c.raio
     return calc
 
@@ -451,109 +458,111 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     mask_segmentacao = cv.resize(mask_segmentacao, (img.shape[1], img.shape[0]))
     circulo_pre_definido = None
 
-    if mask_segmentacao is not None:
-        # converte para 8 bits se necessário (para usar no findContours)
-        if mask_segmentacao.dtype != np.uint8: #precisamos de 8 bits
-            mask_para_contorno = (mask_segmentacao > 0.5).astype(np.uint8) * 255
-        else:
-            mask_para_contorno = mask_segmentacao
+    '''# converte para 8 bits se necessário (para usar no findContours)
+    if mask_segmentacao.dtype != np.uint8: #precisamos de 8 bits
+        mask_para_contorno = (mask_segmentacao > 0.5).astype(np.uint8) * 255
+    else:
+        mask_para_contorno = mask_segmentacao
 
-        contornos, _ = cv.findContours(mask_para_contorno, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-        if contornos:
-            maior_contorno = max(contornos, key=cv.contourArea)
+    contornos, _ = cv.findContours(mask_para_contorno, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+    if contornos:
+        maior_contorno = max(contornos, key=cv.contourArea)
+        
+        area = cv.contourArea(maior_contorno)
+        
+        # Opção 1: Tentar encontrar um polígono (para quadrados/retângulos)
+        epsilon = 0.02 * cv.arcLength(maior_contorno, True)
+        approx = cv.approxPolyDP(maior_contorno, epsilon, True)
+
+        if len(approx) == 4:
+            print("Relógio quadrado/retângulo detectado. Corrigindo perspectiva...")
             
-            area = cv.contourArea(maior_contorno)
+            pts_origem = ordenar_pontos(approx.reshape(4, 2))
+
+            (tl, tr, br, bl) = pts_origem
+            largura = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
+            altura = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
+
+            pts_destino = np.float32([
+                [0, 0],
+                [largura - 1, 0],
+                [largura - 1, altura - 1],
+                [0, altura - 1]
+            ])
             
-            # Opção 1: Tentar encontrar um polígono (para quadrados/retângulos)
-            epsilon = 0.02 * cv.arcLength(maior_contorno, True)
-            approx = cv.approxPolyDP(maior_contorno, epsilon, True)
-
-            if len(approx) == 4:
-                print("Relógio quadrado/retângulo detectado. Corrigindo perspectiva...")
+            # homografia
+            h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
+            if h is not None:
+                img = cv.warpPerspective(img, h, (largura, altura))
+                mask_segmentacao = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
                 
-                pts_origem = ordenar_pontos(approx.reshape(4, 2))
+                # cria um círculo artificial
+                cx = largura // 2
+                cy = altura // 2
+                # diametro = 90% do menor lado (evita bordas)
+                raio = int(min(largura, altura) * 0.45)
+                circulo_pre_definido = Circulo(cx, cy, raio)
+        
+        # Opção 2: Se relógio não for quadrado, usa a elipse (para redondos)
+        elif len(maior_contorno) >= 5 and area > 1000:
+            print("Relógio redondo detectado. Corrigindo perspectiva com elipse...")
+            elipse = cv.fitEllipse(maior_contorno)
+            (cx, cy), (d1, d2), angulo = elipse
 
-                (tl, tr, br, bl) = pts_origem
-                largura = int(max(np.linalg.norm(br - bl), np.linalg.norm(tr - tl)))
-                altura = int(max(np.linalg.norm(tr - br), np.linalg.norm(tl - bl)))
-
-                pts_destino = np.float32([
-                    [0, 0],
-                    [largura - 1, 0],
-                    [largura - 1, altura - 1],
-                    [0, altura - 1]
-                ])
-                
-                # homografia
-                h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
-                if h is not None:
-                    img = cv.warpPerspective(img, h, (largura, altura))
-                    mask_segmentacao = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
-                    
-                    # cria um círculo artificial
-                    cx = largura // 2
-                    cy = altura // 2
-                    # diametro = 90% do menor lado (evita bordas)
-                    raio = int(min(largura, altura) * 0.45)
-                    circulo_pre_definido = Circulo(cx, cy, raio)
+            # Calcula os semi-eixos
+            raio_maior = max(d1, d2) / 2.0
+            raio_menor = min(d1, d2) / 2.0
             
-            # Opção 2: Se relógio não for quadrado, usa a elipse (para redondos)
-            elif len(maior_contorno) >= 5 and area > 1000:
-                print("Relógio redondo detectado. Corrigindo perspectiva com elipse...")
-                ellipse = cv.fitEllipse(maior_contorno)
-                (cx, cy), (d1, d2), angulo = ellipse
-
-                # Calcula os semi-eixos
-                raio_maior = max(d1, d2) / 2.0
-                raio_menor = min(d1, d2) / 2.0
+            if angulo > 90:
+                angulo -= 90
+            else:
+                angulo += 90
+            
+            ang_rad = math.radians(angulo)
+            
+            # Pontos dos eixos maior e menor da elipse
+            cos_ang = math.cos(ang_rad)
+            sin_ang = math.sin(ang_rad)
+            p1x = int(cx + raio_maior * cos_ang)
+            p1y = int(cy + raio_maior * sin_ang)
+            p2x = int(cx - raio_maior * cos_ang)
+            p2y = int(cy - raio_maior * sin_ang)
+            p3x = int(cx + raio_menor * math.cos(ang_rad + math.pi/2))
+            p3y = int(cy + raio_menor * math.sin(ang_rad + math.pi/2))
+            p4x = int(cx - raio_menor * math.cos(ang_rad + math.pi/2))
+            p4y = int(cy - raio_menor * math.sin(ang_rad + math.pi/2))
+            
+            pts_origem = np.float32([[p1x, p1y], [p2x, p2y], [p3x, p3y], [p4x, p4y]])
+            
+            # Pontos de elipse para circulo
+            pts_destino = np.float32([
+                [p1x, p1y],
+                [p2x, p2y],
+                [int(cx + raio_maior * math.cos(ang_rad + math.pi/2)), int(cy + raio_maior * math.sin(ang_rad + math.pi/2))],
+                [int(cx - raio_maior * math.cos(ang_rad + math.pi/2)), int(cy - raio_maior * math.sin(ang_rad + math.pi/2))]
+            ])
+            
+            h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
+            if h is not None:
+                altura, largura = img.shape[:2]
+                img_corrigida = cv.warpPerspective(img, h, (largura, altura))
+                mask_corrigida = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
                 
-                if angulo > 90:
-                    angulo = angulo - 90
-                else:
-                    angulo = angulo + 90
-                
-                ang_rad = math.radians(angulo)
-                
-                # Pontos dos eixos maior e menor da elipse
-                p1x = int(cx + raio_maior * math.cos(ang_rad))
-                p1y = int(cy + raio_maior * math.sin(ang_rad))
-                p2x = int(cx - raio_maior * math.cos(ang_rad))
-                p2y = int(cy - raio_maior * math.sin(ang_rad))
-                p3x = int(cx + raio_menor * math.cos(ang_rad + math.pi/2))
-                p3y = int(cy + raio_menor * math.sin(ang_rad + math.pi/2))
-                p4x = int(cx - raio_menor * math.cos(ang_rad + math.pi/2))
-                p4y = int(cy - raio_menor * math.sin(ang_rad + math.pi/2))
-                
-                pts_origem = np.float32([[p1x, p1y], [p2x, p2y], [p3x, p3y], [p4x, p4y]])
-                
-                # Pontos de elipse para circulo
-                pts_destino = np.float32([
-                    [int(cx + raio_maior * math.cos(ang_rad)), int(cy + raio_maior * math.sin(ang_rad))],
-                    [int(cx - raio_maior * math.cos(ang_rad)), int(cy - raio_maior * math.sin(ang_rad))],
-                    [int(cx + raio_maior * math.cos(ang_rad + math.pi/2)), int(cy + raio_maior * math.sin(ang_rad + math.pi/2))],
-                    [int(cx - raio_maior * math.cos(ang_rad + math.pi/2)), int(cy - raio_maior * math.sin(ang_rad + math.pi/2))]
-                ])
-                
-                h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
-                if h is not None:
-                    altura, largura = img.shape[:2]
-                    img_corrigida = cv.warpPerspective(img, h, (largura, altura))
-                    mask_corrigida = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
-                    
-                    img = img_corrigida
-                    mask_segmentacao = mask_corrigida            
+                img = img_corrigida
+                mask_segmentacao = mask_corrigida'''
 
     # remove fundo
     sem_fundo, mask = removerFundo(img, mask_segmentacao)
 
     gray = preprocessamentoCV(sem_fundo)
+    
     if circulo_pre_definido is not None:
         circulo = circulo_pre_definido
         circulos = [circulo] 
     else:
         # para relógios redondos
         circulos = detectarCirculos(gray)
-        if circulos is None or len(circulos) == 0:
+        if len(circulos) == 0:
             print("Círculos não encontrados")
             return ResultadoLeitura(circulos, None, None, None, None, True)
     circulo = sorted(circulos, key=melhor_circulo(img))[0]
@@ -574,6 +583,12 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     if posicao_12 is not None:
         cx_12, cy_12 = posicao_12
         
+        #g = gray.copy()
+        #circ = Circulo(int(cx_12), int(cy_12), 1)
+        #circ.desenhar_centro(g, (255, 0, 255), 5)
+        #plt.imshow(g)
+        #plt.show()
+
         # vetor do centro do relógio para o 12
         vetor_x = cx_12 - circulo.cx
         vetor_y = cy_12 - circulo.cy
@@ -593,26 +608,15 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
         print(f"  -> Ângulo do 12: {angulo_atual:.2f}°. Rotacionando: {angulo_rotacao:.2f}° para alinhar")
         
         # rotaciona
-        if abs(angulo_rotacao) > 1.0:  # só se o desvio for significativo
-            # rotaciona o círculo calculado
-            centro = (circulo.cx, circulo.cy)
-            
-            print(f"DEBUG: circulo = {circulo}")
-            print(f"DEBUG: circulo.cx = {circulo.cx}, circulo.cy = {circulo.cy}")
-            
-            if circulo is not None:
-                centro = (float(circulo.cx), float(circulo.cy))
-            else:
-                # usar o centro da imagem
-                h, w = img.shape[:2]
-                centro = (w / 2.0, h / 2.0)
-                print("  -> Aviso: circulo é None, usando centro da imagem")
+        if abs(angulo_rotacao) > 3.0:  # só se o desvio for significativo
+            print(f"DEBUG: {circulo=}")
+            print(f"DEBUG: {circulo.cx=}, {circulo.cy=}")
 
             if not isinstance(angulo_rotacao, (int, float)):
                 print(f"  -> Aviso: angulo_rotacao não é numérico ({angulo_rotacao}), ignorando rotação.")
                 angulo_rotacao = 0.0
 
-            M = cv.getRotationMatrix2D(centro, angulo_rotacao, 1.0)
+            M = cv.getRotationMatrix2D((float(circulo.cx), float(circulo.cy)), angulo_rotacao, 1.0)
             img = cv.warpAffine(img, M, (img.shape[1], img.shape[0]), flags=cv.INTER_CUBIC)
             mask_segmentacao = cv.warpAffine(mask_segmentacao, M, (mask_segmentacao.shape[1], mask_segmentacao.shape[0]), flags=cv.INTER_NEAREST)
             
@@ -693,6 +697,4 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     relogio = Relogio(circulo, *clusters)
     horas, minutos = relogio.calcular_hora()
 
-    dados = ResultadoLeitura(circulos, circulo, relogio, horas, minutos)
-
-    return dados
+    return ResultadoLeitura(circulos, circulo, relogio, horas, minutos)
