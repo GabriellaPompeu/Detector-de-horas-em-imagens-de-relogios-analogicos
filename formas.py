@@ -45,7 +45,7 @@ class Linha:
         return self.angulo
     
     def trocar_pontos(self) -> None:
-        self.x1, self.y1 = self.x2, self.y2
+        self.x1, self.y1, self.x2, self.y2 = self.x2, self.y2, self.x1, self.y1
     
     def desenhar(self, output, color:tuple[int], thickness: int):
         cv.line(output, (int(self.x1), int(self.y1)), (int(self.x2), int(self.y2)), color, thickness)
@@ -104,25 +104,46 @@ class Relogio:
     def angulo_do_ponteiro_hora(self) -> float:
         return self._angulo_do_ponteiro(self.ponteiro_h)
 
+    def _angulos_para_hora_minuto(self, ang_h: float, ang_m: float) -> tuple:
+        '''Converte dois ângulos (hora, minuto) em (h, min) inteiros.'''
+        minutos = int((ang_m / 6) % 60)
+        horas_raw = ang_h / 30
+        # ajuste fino: o ponteiro de horas avança ~0.5° por minuto
+        # então a posição esperada é (H + min/60) * 30°
+        # arredondamos quando estamos muito perto de uma hora cheia
+        if abs(horas_raw - round(horas_raw)) < 0.1:
+            horas_int = round(horas_raw) - 1 if minutos > 30 else round(horas_raw)
+        else:
+            horas_int = int(horas_raw)
+        if horas_int == 0:
+            horas_int = 12
+        return horas_int, minutos
+
+    def _erro_consistencia(self, ang_h: float, ang_m: float) -> float:
+        '''Mede quão incoerente é a atribuição hora=ang_h, minuto=ang_m.
+        O ponteiro de horas deve estar em (H + min/60) * 30 graus.
+        Retorna o erro angular em graus (menor = mais coerente).'''
+        h, m = self._angulos_para_hora_minuto(ang_h, ang_m)
+        angulo_esperado_hora = ((h % 12) + m / 60) * 30  # 0..360
+        diff = abs(ang_h - angulo_esperado_hora)
+        if diff > 180:
+            diff = 360 - diff
+        return diff
+
     def calcular_hora(self) -> tuple[int]:
-        angulo_hora = self.angulo_do_ponteiro_hora()
-        angulo_minuto = self.angulo_do_ponteiro_minuto()
-        #print(angulo_hora, angulo_minuto)
-        horas = angulo_hora / 30
-        minutos = (angulo_minuto / 6) % 60
-        
-        # se estiver muito perto de uma hora,
-        # arredonda de forma inteligente baseado nos minutos
-        if abs(horas - round(horas)) < .1:
-            if minutos > 30:
-                horas = round(horas) - 1
-            else:
-                horas = round(horas)
-        
-        horas = int(horas)
-        minutos = int(minutos)
+        ang_h = self._angulo_do_ponteiro(self.ponteiro_h)
+        ang_m = self._angulo_do_ponteiro(self.ponteiro_m)
 
-        if horas == 0:
-            horas = 12
+        # Testa as duas atribuições possíveis e escolhe a mais coerente.
+        # Isso corrige o caso em que comprimentos parecidos fazem a
+        # classificação hora/minuto ser atribuída ao ponteiro errado.
+        erro_normal  = self._erro_consistencia(ang_h, ang_m)
+        erro_trocado = self._erro_consistencia(ang_m, ang_h)
 
-        return horas, minutos
+        if erro_trocado < erro_normal:
+            # a atribuição invertida é mais coerente — usar ao contrário
+            print(f"  Ponteiros trocados detectados (err_normal={erro_normal:.1f}° > "
+                  f"err_trocado={erro_trocado:.1f}°). Corrigindo.")
+            ang_h, ang_m = ang_m, ang_h
+
+        return self._angulos_para_hora_minuto(ang_h, ang_m)

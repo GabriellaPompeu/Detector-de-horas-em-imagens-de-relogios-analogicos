@@ -131,11 +131,6 @@ def removerFundo(img: Img, mask):
 
 def encontrar_centro_12(imagem):
     #Retorna: (x, y) ou None se não encontrar
-    
-    if len(imagem.shape) == 3:
-        imagem_gray = cv.cvtColor(imagem, cv.COLOR_BGR2GRAY)
-    else:
-        imagem_gray = imagem
 
     # encontrar a caixa delimitadora do '12'
     resultado = reader.readtext(imagem, allowlist='12', text_threshold=0.5)
@@ -143,28 +138,6 @@ def encontrar_centro_12(imagem):
     for (bbox, texto, confianca) in resultado:
         if texto == '12' and confianca > 0.5:
             return ((bbox[0][0] + bbox[2][0])/2, (bbox[0][1] + bbox[2][1])/2)
-            # cantos da caixa delimitadora
-            pontos = np.array(bbox, dtype=np.float32).reshape(-1, 2)
-            
-            # máscara na imagem cinza para isolar o 12
-            mascara = np.zeros(imagem_gray.shape[:2], dtype=np.uint8)
-            cv.fillPoly(mascara, [pontos.astype(np.int32)], 255)
-            
-            # aplica para focar apenas no 12
-            regiao_12 = cv.bitwise_and(imagem_gray, imagem_gray, mask=mascara)
-            
-            cantos = cv.goodFeaturesToTrack(regiao_12, maxCorners=20, qualityLevel=0.01, minDistance=10)
-            
-            if cantos is not None:
-                # centro dos cantos detectados
-                centro_x = int(np.mean(cantos[:, 0, 0]))
-                centro_y = int(np.mean(cantos[:, 0, 1]))
-                return (centro_x, centro_y)
-            else:
-                # usa o centro da caixa delimitadora
-                x = int(np.mean([p[0] for p in pontos]))
-                y = int(np.mean([p[1] for p in pontos]))
-                return (x, y)
     
     # 2a tentativa: procurar número romano "XII"
     resultado = reader.readtext(imagem, text_threshold=0.4)  # um pouco mais sensível
@@ -173,28 +146,6 @@ def encontrar_centro_12(imagem):
         texto_clean = ''.join(texto.split()).upper()
         if texto_clean == 'XII' and confianca > 0.4:
             return ((bbox[0][0] + bbox[2][0])/2, (bbox[0][1] + bbox[2][1])/2)
-            # cantos da caixa delimitadora
-            pontos = np.array(bbox, dtype=np.float32).reshape(-1, 2)
-            
-            # máscara na imagem cinza para isolar o 12
-            mascara = np.zeros(imagem_gray.shape[:2], dtype=np.uint8)
-            cv.fillPoly(mascara, [pontos.astype(np.int32)], 255)
-            
-            # aplica para focar apenas no 12
-            regiao_12 = cv.bitwise_and(imagem_gray, imagem_gray, mask=mascara)
-            
-            cantos = cv.goodFeaturesToTrack(regiao_12, maxCorners=20, qualityLevel=0.01, minDistance=10)
-            
-            if cantos is not None:
-                # centro dos cantos detectados
-                centro_x = int(np.mean(cantos[:, 0, 0]))
-                centro_y = int(np.mean(cantos[:, 0, 1]))
-                return (centro_x, centro_y)
-            else:
-                # usa o centro da caixa delimitadora
-                x = int(np.mean([p[0] for p in pontos]))
-                y = int(np.mean([p[1] for p in pontos]))
-                return (x, y)
 
     return None
 
@@ -400,35 +351,52 @@ def estimar_espessura_ponteiro(mask_relogio_bin: Img, ponteiro: Linha, circulo: 
     return float(np.mean(espessuras)) if espessuras else 0.0
 
 class ResultadoLeitura:
-    def __init__(self, circulos: list[Circulo], circulo: Circulo, relogio: Relogio, horas: int, minutos: int, falho=False):
+    def __init__(self, circulos: list[Circulo], circulo: Circulo, relogio: Relogio, horas: int, minutos: int, falho=False, img_processada=None):
         self.circulos = circulos
         self.circulo = circulo
         self.relogio = relogio
         self.horas = horas
         self.minutos = minutos
         self.falho = falho
+        # imagem já corrigida (perspectiva + rotação) — é o espaço
+        # onde os ponteiros foram detectados, e onde o desenho deve ser feito
+        self.img_processada = img_processada
     
     def texto_tempo(self) -> str:
         return f"{self.horas:02d}:{self.minutos:02d}"
 
 
-def visualizar_leitura(output:Img, resize: int, dados: ResultadoLeitura):
-    output = resizeImagem(output, resize)
-    for c in dados.circulos:
-        c.desenhar(output, (50, 50, 50), 2)
-    dados.circulo.desenhar(output, (0, 255, 0), 2)
-    dados.circulo.desenhar_centro(output, (0, 255, 0), 3)
-    
-    dados.relogio.ponteiro_m.desenhar(output, (0, 0, 255), 4)
-    dados.relogio.ponteiro_h.desenhar(output, (255, 0, 0), 4)
+def visualizar_leitura(output: Img, resize: int, dados: ResultadoLeitura):
+    # Usar a imagem processada (espaço onde os ponteiros foram detectados).
+    # Se não estiver disponível (resultado falho), cai para a imagem original.
+    if dados.img_processada is not None:
+        canvas = dados.img_processada.copy()
+    else:
+        canvas = resizeImagem(output, resize)
 
-    cv.rectangle(output, (10, 10), (220, 70), (255,255,255), -1)
-    cv.putText(output, dados.texto_tempo(), (20, 55), cv.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,0), 3)
+    if not dados.falho:
+        for c in dados.circulos:
+            c.desenhar(canvas, (50, 50, 50), 2)
+        dados.circulo.desenhar(canvas, (0, 255, 0), 2)
+        dados.circulo.desenhar_centro(canvas, (0, 255, 0), 3)
 
-    plt.figure(figsize=(8,8))
-    plt.imshow(cv.cvtColor(output, cv.COLOR_BGR2RGB))
+        # vermelho (BGR 0,0,255) = minuto  |  azul (BGR 255,0,0) = hora
+        dados.relogio.ponteiro_m.desenhar(canvas, (0, 0, 255), 4)
+        dados.relogio.ponteiro_h.desenhar(canvas, (255, 0, 0), 4)
+
+        titulo = f"Hora predita: {dados.texto_tempo()}"
+        texto_hud = dados.texto_tempo()
+    else:
+        titulo = "Leitura falhou"
+        texto_hud = "--:--"
+
+    cv.rectangle(canvas, (10, 10), (220, 70), (255, 255, 255), -1)
+    cv.putText(canvas, texto_hud, (20, 55), cv.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 0), 3)
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(cv.cvtColor(canvas, cv.COLOR_BGR2RGB))
     plt.axis("off")
-    plt.title(f"Hora predita: {dados.texto_tempo()}")
+    plt.title(titulo)
     plt.show()
 
 
@@ -458,7 +426,7 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     mask_segmentacao = cv.resize(mask_segmentacao, (img.shape[1], img.shape[0]))
     circulo_pre_definido = None
 
-    '''# converte para 8 bits se necessário (para usar no findContours)
+    # converte para 8 bits se necessário (para usar no findContours)
     if mask_segmentacao.dtype != np.uint8: #precisamos de 8 bits
         mask_para_contorno = (mask_segmentacao > 0.5).astype(np.uint8) * 255
     else:
@@ -505,51 +473,60 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
         
         # Opção 2: Se relógio não for quadrado, usa a elipse (para redondos)
         elif len(maior_contorno) >= 5 and area > 1000:
-            print("Relógio redondo detectado. Corrigindo perspectiva com elipse...")
+            print("Relógio redondo/elíptico detectado. Corrigindo perspectiva com elipse...")
             elipse = cv.fitEllipse(maior_contorno)
             (cx, cy), (d1, d2), angulo = elipse
 
             # Calcula os semi-eixos
             raio_maior = max(d1, d2) / 2.0
             raio_menor = min(d1, d2) / 2.0
-            
-            if angulo > 90:
-                angulo -= 90
-            else:
+
+            # cv.fitEllipse retorna 'angulo' como a orientação do eixo
+            # correspondente a d1 (largura). O eixo MAIOR só coincide com
+            # 'angulo' quando d1 >= d2; caso contrário o eixo maior está a
+            # 90° dele. (O critério antigo, baseado no valor de 'angulo',
+            # não tinha relação nenhuma com qual eixo é o maior.)
+            if d1 < d2:
                 angulo += 90
-            
-            ang_rad = math.radians(angulo)
-            
-            # Pontos dos eixos maior e menor da elipse
-            cos_ang = math.cos(ang_rad)
-            sin_ang = math.sin(ang_rad)
-            p1x = int(cx + raio_maior * cos_ang)
-            p1y = int(cy + raio_maior * sin_ang)
-            p2x = int(cx - raio_maior * cos_ang)
-            p2y = int(cy - raio_maior * sin_ang)
-            p3x = int(cx + raio_menor * math.cos(ang_rad + math.pi/2))
-            p3y = int(cy + raio_menor * math.sin(ang_rad + math.pi/2))
-            p4x = int(cx - raio_menor * math.cos(ang_rad + math.pi/2))
-            p4y = int(cy - raio_menor * math.sin(ang_rad + math.pi/2))
-            
-            pts_origem = np.float32([[p1x, p1y], [p2x, p2y], [p3x, p3y], [p4x, p4y]])
-            
-            # Pontos de elipse para circulo
-            pts_destino = np.float32([
-                [p1x, p1y],
-                [p2x, p2y],
-                [int(cx + raio_maior * math.cos(ang_rad + math.pi/2)), int(cy + raio_maior * math.sin(ang_rad + math.pi/2))],
-                [int(cx - raio_maior * math.cos(ang_rad + math.pi/2)), int(cy - raio_maior * math.sin(ang_rad + math.pi/2))]
-            ])
-            
-            h, _ = cv.findHomography(pts_origem, pts_destino, cv.RANSAC)
-            if h is not None:
+
+            # evita divisão por zero / elipses degeneradas
+            if raio_menor < 1e-3 or raio_maior < 1e-3:
+                circulo_pre_definido = None
+            else:
+                ang_rad = math.radians(angulo)
+                cos_t = math.cos(ang_rad)
+                sin_t = math.sin(ang_rad)
+
+                # fator de esticamento do eixo menor até igualar o maior
+                k = raio_maior / raio_menor
+
+                # transformação AFIM (não projetiva) que estica apenas a
+                # direção perpendicular ao eixo maior, mantendo o eixo maior
+                # intocado -- monta uma elipse alinhada aos eixos, escala o
+                # eixo menor e desfaz a rotação. Evita usar findHomography
+                # (que é uma ferramenta para 4 correspondências de pontos
+                # ruidosas, não para uma deformação afim conhecida) e evita
+                # distorções projetivas indesejadas fora da região central.
+                a00 = cos_t**2 + k * sin_t**2
+                a01 = sin_t * cos_t * (1 - k)
+                a10 = sin_t * cos_t * (1 - k)
+                a11 = sin_t**2 + k * cos_t**2
+
+                A = np.array([[a00, a01], [a10, a11]], dtype=np.float64)
+                centro = np.array([cx, cy], dtype=np.float64)
+                t = centro - A @ centro
+
+                M = np.array([
+                    [A[0, 0], A[0, 1], t[0]],
+                    [A[1, 0], A[1, 1], t[1]]
+                ], dtype=np.float32)
+
                 altura, largura = img.shape[:2]
-                img_corrigida = cv.warpPerspective(img, h, (largura, altura))
-                mask_corrigida = cv.warpPerspective(mask_segmentacao, h, (largura, altura))
-                
-                img = img_corrigida
-                mask_segmentacao = mask_corrigida'''
+                img = cv.warpAffine(img, M, (largura, altura), flags=cv.INTER_CUBIC)
+                mask_segmentacao = cv.warpAffine(mask_segmentacao, M, (largura, altura), flags=cv.INTER_NEAREST)
+
+                # depois de esticar, a elipse virou um círculo de raio = raio_maior
+                circulo_pre_definido = Circulo(int(cx), int(cy), int(raio_maior))
 
     # remove fundo
     sem_fundo, mask = removerFundo(img, mask_segmentacao)
@@ -643,6 +620,10 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
         else:
             print("    Relógio parece já estar em pé. Mantendo orientação.")
 
+    # salva a imagem já totalmente corrigida — é nesse espaço que os ponteiros
+    # serão detectados, e é nesse espaço que o desenho deve acontecer
+    img_processada = img.copy()
+
     # máscara circular interna
     mask_clock = np.zeros_like(gray)
     cv.circle(mask_clock, (circulo.cx, circulo.cy), int(circulo.raio * 0.92), 255, -1)
@@ -653,7 +634,6 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     low = max(0, int(otsu_thresh * 0.5))
     high = min(255, int(otsu_thresh * 1.5))
     edges = cv.Canny(gray, low, high)
-    #edges = cv.Canny(gray, 70, 180)
 
     kernel = np.ones((3,3), np.uint8)
     edges = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel)
@@ -692,9 +672,9 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
 
     if len(clusters) < 2:
         print("Ponteiros insuficientes")
-        return ResultadoLeitura(circulos, circulo, None, None, None, True)
+        return ResultadoLeitura(circulos, circulo, None, None, None, True, img_processada)
 
     relogio = Relogio(circulo, *clusters)
     horas, minutos = relogio.calcular_hora()
 
-    return ResultadoLeitura(circulos, circulo, relogio, horas, minutos)
+    return ResultadoLeitura(circulos, circulo, relogio, horas, minutos, img_processada=img_processada)
