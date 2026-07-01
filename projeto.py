@@ -76,7 +76,7 @@ def deteccao_geral(mostrar_resultados: bool):
 if __name__ == "__main__":
     print(ARTE_CAPA)
     print('Seja bem vindo ao nosso trabalho de tópicos I')
-    print('- Bruna, Gabriela, Felipe')
+    print('- Bruna, Gabriella, Felipe')
     print()
 
     sair = False
