@@ -150,26 +150,33 @@ def encontrar_centro_12(imagem):
     return None
 
 def esta_12_em_cima(edges, circulo):
-
     mask_coroa = np.zeros_like(edges, dtype=np.uint8)
+    
     cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 1.2), 255, -1)
     cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 0.7), 0, -1)
+    
     regiao = cv.bitwise_and(edges, edges, mask=mask_coroa)
     h, w = regiao.shape
+    
     metade_sup = regiao[0:circulo.cy, :]
     metade_inf = regiao[circulo.cy:h, :]
     soma_sup = np.sum(metade_sup > 0)
     soma_inf = np.sum(metade_inf > 0)
+    
     return soma_sup > soma_inf
 
 def calcular_somas_bordas(edges, circulo):
     mask_coroa = np.zeros_like(edges, dtype=np.uint8)
+    
     cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 0.95), 255, -1)
     cv.circle(mask_coroa, (circulo.cx, circulo.cy), int(circulo.raio * 0.7), 0, -1)
+    
     regiao = cv.bitwise_and(edges, edges, mask=mask_coroa)
     h, w = regiao.shape
+    
     metade_sup = regiao[0:circulo.cy, :]
     metade_inf = regiao[circulo.cy:h, :]
+    
     return np.sum(metade_sup > 0), np.sum(metade_inf > 0)
 
 def detectarCirculos(gray: Img) -> list[Circulo]:
@@ -358,8 +365,6 @@ class ResultadoLeitura:
         self.horas = horas
         self.minutos = minutos
         self.falho = falho
-        # imagem já corrigida (perspectiva + rotação) — é o espaço
-        # onde os ponteiros foram detectados, e onde o desenho deve ser feito
         self.img_processada = img_processada
     
     def texto_tempo(self) -> str:
@@ -367,8 +372,6 @@ class ResultadoLeitura:
 
 
 def visualizar_leitura(output: Img, resize: int, dados: ResultadoLeitura):
-    # Usar a imagem processada (espaço onde os ponteiros foram detectados).
-    # Se não estiver disponível (resultado falho), cai para a imagem original.
     if dados.img_processada is not None:
         canvas = dados.img_processada.copy()
     else:
@@ -608,8 +611,6 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
         else:
             print("    Relógio parece já estar em pé. Mantendo orientação.")
 
-    # salva a imagem já totalmente corrigida — é nesse espaço que os ponteiros
-    # serão detectados, e é nesse espaço que o desenho deve acontecer
     img_processada = img.copy()
 
     # máscara circular interna
