@@ -481,11 +481,6 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
             raio_maior = max(d1, d2) / 2.0
             raio_menor = min(d1, d2) / 2.0
 
-            # cv.fitEllipse retorna 'angulo' como a orientação do eixo
-            # correspondente a d1 (largura). O eixo MAIOR só coincide com
-            # 'angulo' quando d1 >= d2; caso contrário o eixo maior está a
-            # 90° dele. (O critério antigo, baseado no valor de 'angulo',
-            # não tinha relação nenhuma com qual eixo é o maior.)
             if d1 < d2:
                 angulo += 90
 
@@ -500,13 +495,6 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
                 # fator de esticamento do eixo menor até igualar o maior
                 k = raio_maior / raio_menor
 
-                # transformação AFIM (não projetiva) que estica apenas a
-                # direção perpendicular ao eixo maior, mantendo o eixo maior
-                # intocado -- monta uma elipse alinhada aos eixos, escala o
-                # eixo menor e desfaz a rotação. Evita usar findHomography
-                # (que é uma ferramenta para 4 correspondências de pontos
-                # ruidosas, não para uma deformação afim conhecida) e evita
-                # distorções projetivas indesejadas fora da região central.
                 a00 = cos_t**2 + k * sin_t**2
                 a01 = sin_t * cos_t * (1 - k)
                 a10 = sin_t * cos_t * (1 - k)
