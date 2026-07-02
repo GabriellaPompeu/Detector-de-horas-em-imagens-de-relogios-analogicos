@@ -59,6 +59,13 @@ class Linha:
         if math.dist((self.x1, self.y1), ponto) > math.dist((self.x2, self.y2), ponto):
             return (self.x1, self.y1)
         return (self.x2, self.y2)
+    
+    def esticar_ate_ponto(self, ponto:tuple[float]):
+        if math.dist((self.x1, self.y1), ponto) > math.dist((self.x2, self.y2), ponto):
+            self.x2, self.y2 = ponto
+        else:
+            self.x1, self.y1 = ponto
+
 
 
 def linha_media(linhas: list[Linha]) -> Linha:
@@ -74,12 +81,17 @@ def linha_media(linhas: list[Linha]) -> Linha:
             p1.append((linha.x2, linha.y2))
             p2.append((linha.x1, linha.y1))
 
-    x1 = np.mean([p[0] for p in p1])
-    y1 = np.mean([p[1] for p in p1])
-    x2 = np.mean([p[0] for p in p2])
-    y2 = np.mean([p[1] for p in p2])
+    #x1 = np.mean([p[0] for p in p1])
+    #y1 = np.mean([p[1] for p in p1])
+    #x2 = np.mean([p[0] for p in p2])
+    #y2 = np.mean([p[1] for p in p2])
 
-    return Linha(x1, y1, x2, y2)
+    mx = np.mean([p1[0], p2[0]])
+    my = np.mean([p1[1], p2[1]])
+    p1f = max(p1, key=lambda p: math.dist(p, (mx, my)))
+    p2f = max(p2, key=lambda p: math.dist(p, (mx, my)))
+
+    return Linha(*p1f, *p2f)
 
 
 class Relogio:
@@ -104,46 +116,32 @@ class Relogio:
     def angulo_do_ponteiro_hora(self) -> float:
         return self._angulo_do_ponteiro(self.ponteiro_h)
 
-    def _angulos_para_hora_minuto(self, ang_h: float, ang_m: float) -> tuple:
-        '''Converte dois ângulos (hora, minuto) em (h, min) inteiros.'''
-        minutos = int((ang_m / 6) % 60)
-        horas_raw = ang_h / 30
-        # ajuste fino: o ponteiro de horas avança ~0.5° por minuto
-        # então a posição esperada é (H + min/60) * 30°
-        # arredondamos quando estamos muito perto de uma hora cheia
-        if abs(horas_raw - round(horas_raw)) < 0.1:
-            horas_int = round(horas_raw) - 1 if minutos > 30 else round(horas_raw)
-        else:
-            horas_int = int(horas_raw)
-        if horas_int == 0:
-            horas_int = 12
-        return horas_int, minutos
-
-    def _erro_consistencia(self, ang_h: float, ang_m: float) -> float:
-        '''Mede quão incoerente é a atribuição hora=ang_h, minuto=ang_m.
-        O ponteiro de horas deve estar em (H + min/60) * 30 graus.
-        Retorna o erro angular em graus (menor = mais coerente).'''
-        h, m = self._angulos_para_hora_minuto(ang_h, ang_m)
-        angulo_esperado_hora = ((h % 12) + m / 60) * 30  # 0..360
-        diff = abs(ang_h - angulo_esperado_hora)
-        if diff > 180:
-            diff = 360 - diff
-        return diff
-
     def calcular_hora(self) -> tuple[int]:
-        ang_h = self._angulo_do_ponteiro(self.ponteiro_h)
-        ang_m = self._angulo_do_ponteiro(self.ponteiro_m)
+        angulo_hora = self.angulo_do_ponteiro_hora()
+        angulo_minuto = self.angulo_do_ponteiro_minuto()
+        #print(angulo_hora, angulo_minuto)
+        horas = angulo_hora / 30
+        minutos = (angulo_minuto / 6) % 60
+        print(f'{horas=}, {minutos=}')
+        
+        # se estiver muito perto de uma hora,
+        # arredonda de forma inteligente baseado nos minutos
+        if abs(horas - round(horas)) < .2:
+            if minutos > 30:
+                horas = (round(horas) - 1) % 12
+            else:
+                horas = round(horas)
+        
+        horas = int(horas)
+        minutos = int(minutos)
 
-        # Testa as duas atribuições possíveis e escolhe a mais coerente.
-        # Isso corrige o caso em que comprimentos parecidos fazem a
-        # classificação hora/minuto ser atribuída ao ponteiro errado.
-        erro_normal  = self._erro_consistencia(ang_h, ang_m)
-        erro_trocado = self._erro_consistencia(ang_m, ang_h)
+        if horas == 0:
+            horas = 12
 
-        if erro_trocado < erro_normal:
-            # a atribuição invertida é mais coerente — usar ao contrário
-            print(f"  Ponteiros trocados detectados (err_normal={erro_normal:.1f}° > "
-                  f"err_trocado={erro_trocado:.1f}°). Corrigindo.")
-            ang_h, ang_m = ang_m, ang_h
+        return horas, minutos
 
-        return self._angulos_para_hora_minuto(ang_h, ang_m)
+def diferenca_angulo(ang_1, ang_2):
+    ang_1 %= 360
+    ang_2 %= 360
+    mi, ma = min(ang_1, ang_2), max(ang_1, ang_2)
+    return min(ma - mi, 360 - (ma - mi))

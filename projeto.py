@@ -1,10 +1,4 @@
-from ultralytics import YOLO
-from pathlib import Path
 import cv2 as cv
-import numpy as np
-import matplotlib.pyplot as plt
-import math
-import os
 import arquivos
 import visao
 

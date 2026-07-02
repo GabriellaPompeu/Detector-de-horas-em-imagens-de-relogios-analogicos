@@ -224,8 +224,8 @@ def filtrarLinhas(linhas:list[Linha], circulo:Circulo) -> list[Linha]:
     ponteiros = []
 
     for linha in linhas:
-        # remove linhas pequenas
-        if linha.get_comprimento() < circulo.raio * 0.35:
+        # remove linhas de tamanhos ruins
+        if circulo.raio * 1.2 < linha.get_comprimento() < circulo.raio * 0.4:
             continue
         
         d1 = math.dist((linha.x1, linha.y1), (circulo.cx, circulo.cy))
@@ -234,8 +234,19 @@ def filtrarLinhas(linhas:list[Linha], circulo:Circulo) -> list[Linha]:
         d_centro = min(d1, d2)
         d_ponta = max(d1, d2)
 
+        #ver se a direcao condiz com a posição da linha
+        pos_ponta = linha.ponta_mais_distante((circulo.cx, circulo.cy))
+        pos_cent = linha.ponta_mais_proxima((circulo.cx, circulo.cy))
+        vec_ang_l = np.array([float(pos_ponta[0] - pos_cent[0]), float(pos_ponta[1] - pos_cent[1])])
+        vec_ang_l = vec_ang_l / np.linalg.norm(vec_ang_l)
+        vec_ang_c = np.array([float(pos_ponta[0] - circulo.cx), float(pos_ponta[1] - circulo.cy)])
+        vec_ang_c = vec_ang_c / np.linalg.norm(vec_ang_c)
+        prod = np.linalg.multi_dot((vec_ang_l, vec_ang_c))
+        
+        if prod < 0.95:
+            continue
         # uma ponta precisa tocar centro
-        tol_centro = 0.25
+        tol_centro = 0.3
         if d_centro > circulo.raio * tol_centro:
             continue
         
@@ -249,15 +260,28 @@ def filtrarLinhas(linhas:list[Linha], circulo:Circulo) -> list[Linha]:
     return ponteiros
 
 
-def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> tuple[Linha]:
+def clusterizarPonteiros(ponteiros: list[Linha], circulo: Circulo, tolerancia=12) -> tuple[Linha]:
     if not ponteiros:
         return []
 
     ponteiros = sorted(ponteiros, key=lambda p: p.get_angulo())
-    
-    clusters = [[ponteiros[0]]]
 
-    for i in range(1, len(ponteiros)):
+    clusters = [[(ponteiros[0], Linha(*ponteiros[0].ponta_mais_distante((circulo.cx, circulo.cy)), circulo.cx, circulo.cy).get_angulo())]]
+
+    for p in ponteiros[1:]:
+        a = Linha(*p.ponta_mais_distante((circulo.cx, circulo.cy)), circulo.cx, circulo.cy).get_angulo()
+        achou = False
+        for c in clusters:
+            if diferenca_angulo(a, c[0][1]) < 12:
+                c.append((p, a))
+                achou = True
+                break
+        
+        if not achou:
+            clusters.append([(p, a)])
+    
+
+    '''for i in range(1, len(ponteiros)):
         atual = ponteiros[i]
         anterior = ponteiros[i - 1]
 
@@ -270,18 +294,18 @@ def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> t
         ang_ultimo = clusters[-1][-1].get_angulo()
         distancia_circular = (180 - ang_ultimo) + ang_primeiro
         if distancia_circular <= tolerancia:
-            clusters[0] = clusters.pop() + clusters[0]
+            clusters[0] = clusters.pop() + clusters[0]'''
 
     candidatos = []
 
     for cluster in clusters:
-        angulos = [c.get_angulo() for c in cluster]
-        tamanhos = [c.get_comprimento() for c in cluster]
+        #angulos = [c.get_angulo() for c in cluster]
+        tamanhos = [c[0].get_comprimento() for c in cluster]
 
         # maior linha
-        coords = max(cluster, key=lambda c: c.get_comprimento())
+        #coords = max(cluster, key=lambda c: c.get_comprimento())
         tamanho_medio = np.mean(tamanhos)
-        razao = tamanho_medio / raio
+        razao = tamanho_medio / circulo.raio
 
         # remove ponteiros MUITO longos
         # normalmente segundos
@@ -292,7 +316,7 @@ def clusterizarPonteiros(ponteiros: list[Linha], raio: float, tolerancia=8) -> t
         if razao < 0.35:
             continue
         
-        candidatos.append(linha_media(cluster))
+        candidatos.append(linha_media([c[0] for c in cluster]))
 
 
     if len(candidatos) < 2:
@@ -628,20 +652,25 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     edges = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel)
     
     linhas = detectarLinhas(edges)
+    ponteiros = filtrarLinhas(linhas, circulo)
+    
     #---------------------------------
-    '''k = 0
+    k = 0
     img_li = img.copy()
     for l in linhas:
-        l.desenhar(img_li, (255, 0, k), 2)
+        if l in ponteiros:
+            l.desenhar(img_li, (255, 0, k), 2)
+        else:
+            l.desenhar(img_li, (0, k, 255), 2)
+
         k += 31
         if k > 255:
             k -= 255
     plt.imshow(cv.cvtColor(img_li, cv.COLOR_BGR2RGB))
-    plt.show()'''
+    plt.show()
     #---------------------------------
 
-    ponteiros = filtrarLinhas(linhas, circulo)
-    clusters = clusterizarPonteiros(ponteiros, circulo.raio)
+    clusters = clusterizarPonteiros(ponteiros, circulo)
 
     # se faltam ponteiros, tenta de novo com bordas mais sensíveis
     if len(clusters) < 2:
@@ -655,7 +684,7 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
         if linhas2 is not None:
             linhas2 = [Linha(*l[0]) for l in linhas2]
             ponteiros2 = filtrarLinhas(linhas2, circulo)
-            clusters2 = clusterizarPonteiros(ponteiros2, circulo.raio)
+            clusters2 = clusterizarPonteiros(ponteiros2, circulo)
             if len(clusters2) >= 2:
                 clusters = clusters2
 
