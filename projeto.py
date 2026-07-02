@@ -1,10 +1,4 @@
-from ultralytics import YOLO
-from pathlib import Path
 import cv2 as cv
-import numpy as np
-import matplotlib.pyplot as plt
-import math
-import os
 import arquivos
 import visao
 
@@ -24,7 +18,7 @@ ARTE_CAPA = '''
   ╚═══════╝'''
 
 
-def deteccao_geral():
+def deteccao_geral(mostrar_resultados: bool):
     pasta_alvo = "imagens"
 
     lista = arquivos.listar_imagens(pasta_alvo)
@@ -51,7 +45,8 @@ def deteccao_geral():
             print("Nenhum relógio detectado.")
             continue
         
-        visao.visualizar_deteccao(img.copy(), resultado_deteccao)
+        if mostrar_resultados:
+            visao.visualizar_deteccao(img.copy(), resultado_deteccao)
 
         resize_leitura = 500
         resultado_hora = visao.lerRelogio(resultado_deteccao.crop, resize_leitura, resultado_deteccao.mask)
@@ -62,7 +57,8 @@ def deteccao_geral():
             continue
         
         output = resultado_deteccao.crop.copy()
-        visao.visualizar_leitura(output, resize_leitura, resultado_hora)
+        if mostrar_resultados:
+            visao.visualizar_leitura(output, resize_leitura, resultado_hora)
         print(f"Resultado final: {resultado_hora.texto_tempo()}")
         arquivos.salvar_imagem(output, caminho)
 
@@ -74,20 +70,20 @@ def deteccao_geral():
 if __name__ == "__main__":
     print(ARTE_CAPA)
     print('Seja bem vindo ao nosso trabalho de tópicos I')
-    print('- Bruna, Gabriela, Felipe')
+    print('- Bruna, Gabriella, Felipe')
     print()
 
     sair = False
     while not sair:
-        print('Digite "g" para ver a detecção de todos os relógios um por um.')
+        print('Digite "a" para ver a detecção de todos os relógios um por um.')
         print('Digite "f" para calcular o resultado em todos os relógios')
         print('Digite qualquer outra coisa para sair.')
 
         comando = input()
-        if comando == 'g':
-            deteccao_geral()
+        if comando == 'a':
+            deteccao_geral(True)
         elif comando == 'f':
-            pass
+            deteccao_geral(False)
         else:
             sair = True
 

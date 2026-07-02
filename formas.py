@@ -27,24 +27,25 @@ class Linha:
         self.angulo = None
     
     def get_comprimento(self) -> float:
-        if not self.comprimento:
+        if self.comprimento is None: #não recalcula quando é zero
             self.comprimento = math.dist((self.x1, self.y1), (self.x2, self.y2))
         return self.comprimento
 
     def get_angulo(self) -> float:
-        if not self.angulo:
+        if self.angulo is None: #não recalcula quando é zero
             dx = self.x2 - self.x1
             dy = self.y1 - self.y2
 
-            self.angulo = math.degrees(math.atan2(dy, dx))
-
-            if self.angulo < 0:
-                self.angulo += 360
+            #self.angulo = math.degrees(math.atan2(dy, dx))
+            ang = math.degrees(math.atan2(dy, dx))
+            self.angulo = ang % 180
+            #if self.angulo < 0:
+            #    self.angulo += 360
             
         return self.angulo
     
     def trocar_pontos(self) -> None:
-        self.x1, self.y1 = self.x2, self.y2
+        self.x1, self.y1, self.x2, self.y2 = self.x2, self.y2, self.x1, self.y1
     
     def desenhar(self, output, color:tuple[int], thickness: int):
         cv.line(output, (int(self.x1), int(self.y1)), (int(self.x2), int(self.y2)), color, thickness)
@@ -58,6 +59,13 @@ class Linha:
         if math.dist((self.x1, self.y1), ponto) > math.dist((self.x2, self.y2), ponto):
             return (self.x1, self.y1)
         return (self.x2, self.y2)
+    
+    def esticar_ate_ponto(self, ponto:tuple[float]):
+        if math.dist((self.x1, self.y1), ponto) > math.dist((self.x2, self.y2), ponto):
+            self.x2, self.y2 = ponto
+        else:
+            self.x1, self.y1 = ponto
+
 
 
 def linha_media(linhas: list[Linha]) -> Linha:
@@ -73,12 +81,17 @@ def linha_media(linhas: list[Linha]) -> Linha:
             p1.append((linha.x2, linha.y2))
             p2.append((linha.x1, linha.y1))
 
-    x1 = np.mean([p[0] for p in p1])
-    y1 = np.mean([p[1] for p in p1])
-    x2 = np.mean([p[0] for p in p2])
-    y2 = np.mean([p[1] for p in p2])
+    #x1 = np.mean([p[0] for p in p1])
+    #y1 = np.mean([p[1] for p in p1])
+    #x2 = np.mean([p[0] for p in p2])
+    #y2 = np.mean([p[1] for p in p2])
 
-    return Linha(x1, y1, x2, y2)
+    mx = np.mean([p1[0], p2[0]])
+    my = np.mean([p1[1], p2[1]])
+    p1f = max(p1, key=lambda p: math.dist(p, (mx, my)))
+    p2f = max(p2, key=lambda p: math.dist(p, (mx, my)))
+
+    return Linha(*p1f, *p2f)
 
 
 class Relogio:
@@ -109,12 +122,13 @@ class Relogio:
         #print(angulo_hora, angulo_minuto)
         horas = angulo_hora / 30
         minutos = (angulo_minuto / 6) % 60
+        print(f'{horas=}, {minutos=}')
         
         # se estiver muito perto de uma hora,
         # arredonda de forma inteligente baseado nos minutos
-        if abs(horas - round(horas)) < .1:
+        if abs(horas - round(horas)) < .2:
             if minutos > 30:
-                horas = round(horas) - 1
+                horas = (round(horas) - 1) % 12
             else:
                 horas = round(horas)
         
@@ -125,3 +139,9 @@ class Relogio:
             horas = 12
 
         return horas, minutos
+
+def diferenca_angulo(ang_1, ang_2):
+    ang_1 %= 360
+    ang_2 %= 360
+    mi, ma = min(ang_1, ang_2), max(ang_1, ang_2)
+    return min(ma - mi, 360 - (ma - mi))
