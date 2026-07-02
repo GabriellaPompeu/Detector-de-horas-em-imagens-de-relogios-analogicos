@@ -36,11 +36,8 @@ class Linha:
             dx = self.x2 - self.x1
             dy = self.y1 - self.y2
 
-            #self.angulo = math.degrees(math.atan2(dy, dx))
             ang = math.degrees(math.atan2(dy, dx))
             self.angulo = ang % 180
-            #if self.angulo < 0:
-            #    self.angulo += 360
             
         return self.angulo
     
@@ -81,11 +78,6 @@ def linha_media(linhas: list[Linha]) -> Linha:
             p1.append((linha.x2, linha.y2))
             p2.append((linha.x1, linha.y1))
 
-    #x1 = np.mean([p[0] for p in p1])
-    #y1 = np.mean([p[1] for p in p1])
-    #x2 = np.mean([p[0] for p in p2])
-    #y2 = np.mean([p[1] for p in p2])
-
     mx = np.mean([p1[0], p2[0]])
     my = np.mean([p1[1], p2[1]])
     p1f = max(p1, key=lambda p: math.dist(p, (mx, my)))
@@ -119,11 +111,9 @@ class Relogio:
     def calcular_hora(self) -> tuple[int]:
         angulo_hora = self.angulo_do_ponteiro_hora()
         angulo_minuto = self.angulo_do_ponteiro_minuto()
-        #print(angulo_hora, angulo_minuto)
         horas = angulo_hora / 30
         minutos = (angulo_minuto / 6) % 60
-        print(f'{horas=}, {minutos=}')
-        
+
         # se estiver muito perto de uma hora,
         # arredonda de forma inteligente baseado nos minutos
         if abs(horas - round(horas)) < .2:

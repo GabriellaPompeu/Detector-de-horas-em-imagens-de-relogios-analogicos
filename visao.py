@@ -26,13 +26,6 @@ def min_max(a, b):
 def preprocessamentoCV(img: Img) -> Img:
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
 
-    # melhora contraste
-    #clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    #gray = clahe.apply(gray)
-
-    #gray = cv.equalizeHist(gray) #ruim
-    #gray = np.array(((gray / 255) ** 2) * 255, dtype=gray.dtype) #quase
-    #gray = np.array(((((gray / 255) - 0.5)/4) ** 0.33333 + 0.5) * 255, dtype=gray.dtype) #sem controle
     x = (gray / 255)
     forca = 2
     gray = np.array(((x ** forca) / (x ** forca + (1 - x) ** forca)) * 255, dtype=gray.dtype)
@@ -212,7 +205,6 @@ def detectarLinhas(edges) -> list[Linha]:
         linhas = cv.HoughLinesP(edges, rho=1, theta=np.pi/180,
                                 threshold=30, minLineLength=25, maxLineGap=15)
     if linhas is None or len(linhas) == 0:
-        #raise(Exception('sem linhas detectadas')) # -------------------------------------------- teste
         return []  # não quebra
     return [Linha(*l[0]) for l in linhas]
 
@@ -280,21 +272,6 @@ def clusterizarPonteiros(ponteiros: list[Linha], circulo: Circulo, tolerancia=12
         if not achou:
             clusters.append([(p, a)])
     
-
-    '''for i in range(1, len(ponteiros)):
-        atual = ponteiros[i]
-        anterior = ponteiros[i - 1]
-
-        if abs(atual.get_angulo() - anterior.get_angulo()) <= tolerancia:
-            clusters[-1].append(atual)
-        else:
-            clusters.append([atual])
-    if len(clusters) > 1:
-        ang_primeiro = clusters[0][0].get_angulo()
-        ang_ultimo = clusters[-1][-1].get_angulo()
-        distancia_circular = (180 - ang_ultimo) + ang_primeiro
-        if distancia_circular <= tolerancia:
-            clusters[0] = clusters.pop() + clusters[0]'''
 
     candidatos = []
 
@@ -574,12 +551,6 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
 
     if posicao_12 is not None:
         cx_12, cy_12 = posicao_12
-        
-        #g = gray.copy()
-        #circ = Circulo(int(cx_12), int(cy_12), 1)
-        #circ.desenhar_centro(g, (255, 0, 255), 5)
-        #plt.imshow(g)
-        #plt.show()
 
         # vetor do centro do relógio para o 12
         vetor_x = cx_12 - circulo.cx
@@ -653,22 +624,6 @@ def lerRelogio(img: Img, resize: int, mask_segmentacao: Img) -> ResultadoLeitura
     
     linhas = detectarLinhas(edges)
     ponteiros = filtrarLinhas(linhas, circulo)
-    
-    #---------------------------------
-    k = 0
-    img_li = img.copy()
-    for l in linhas:
-        if l in ponteiros:
-            l.desenhar(img_li, (255, 0, k), 2)
-        else:
-            l.desenhar(img_li, (0, k, 255), 2)
-
-        k += 31
-        if k > 255:
-            k -= 255
-    plt.imshow(cv.cvtColor(img_li, cv.COLOR_BGR2RGB))
-    plt.show()
-    #---------------------------------
 
     clusters = clusterizarPonteiros(ponteiros, circulo)
 
